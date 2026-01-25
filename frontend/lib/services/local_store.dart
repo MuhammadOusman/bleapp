@@ -1,0 +1,34 @@
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class LocalStore {
+  static const _pendingKey = 'pending_attendance';
+
+  static Future<List<Map<String, dynamic>>> loadPending() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_pendingKey);
+    if (raw == null) return [];
+    final arr = jsonDecode(raw) as List;
+    return arr.map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<void> savePending(List<Map<String, dynamic>> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pendingKey, jsonEncode(items));
+  }
+
+  static Future<void> addPending(Map<String, dynamic> item) async {
+    final list = await loadPending();
+    list.add(item);
+    await savePending(list);
+  }
+
+  static Future<void> updatePending(List<Map<String, dynamic>> items) async {
+    await savePending(items);
+  }
+
+  static Future<void> clearPending() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_pendingKey);
+  }
+}

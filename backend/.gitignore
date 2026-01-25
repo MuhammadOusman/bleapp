@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+dist/
+
+# Environment Variables (CRITICAL)
+.env
+.env.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Optional: IDE Settings
+.vscode/
+.idea/
+.vercel
