@@ -42,6 +42,14 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
           await _api.markAttendance(sessionId, device);
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Marked present')));
+        } on ApiException catch (e) {
+          final msg = e.statusCode == 410
+              ? 'Too late! Session expired.'
+              : e.statusCode == 403
+                  ? 'Account locked to another device.'
+                  : e.toString();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         } catch (e) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));

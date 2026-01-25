@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/api_service.dart';
 import '../services/ble_service.dart';
 import '../services/permission_service.dart';
@@ -30,6 +31,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   StreamSubscription<dynamic>? _connSub;
   bool _syncing = false;
 
+  // Poll timer for realtime fallback
+  Timer? _realtimeTimer;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +55,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     _ble.stopBeacon();
     _ble.stopScan();
     _connSub?.cancel();
+    try {
+      _realtimeTimer?.cancel();
+      _realtimeTimer = null;
+    } catch (_) {}
     super.dispose();
   }
 
@@ -72,6 +80,34 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       _remaining = 15;
     });
 
+    // Poll attendance table every 2s for this session (simple realtime fallback)
+    _realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
+      try {
+        final resp = await Supabase.instance.client.from('attendance').select('id,student_id,created_at,device_signature').eq('session_id', sid);
+        final rows = (resp as List<dynamic>?) ?? [];
+        for (var r in rows) {
+          final studentId = r['student_id'];
+          final exists = _detected.any((d) => d['student_id'] == studentId);
+          if (!exists) {
+            // best-effort fetch profile name
+            final profileRes = await Supabase.instance.client.from('profiles').select('id,full_name').eq('id', studentId).limit(1);
+            final profiles = (profileRes as List<dynamic>?) ?? [];
+            final name = profiles.isNotEmpty ? (profiles[0]['full_name'] as String? ?? 'Student') : 'Student';
+            setState(() {
+              _detected.add({
+                'session_id': sid,
+                'student_id': studentId,
+                'device_signature': r['device_signature'] ?? 'unknown',
+                'discovered_at': r['created_at'] ?? DateTime.now().toIso8601String(),
+                'approved': true,
+                'synced': true,
+                'name': name,
+              });
+            });
+          }
+        }
+      } catch (_) {}
+    });
     final status = await _ble.checkTransmissionSupport();
     if (!status) {
       if (!mounted) return;
@@ -86,6 +122,11 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
         _remaining -= 1;
         if (_remaining <= 0) {
           _ble.stopBeacon();
+          // Stop polling when session ends
+          try {
+            _realtimeTimer?.cancel();
+            _realtimeTimer = null;
+          } catch (_) {}
           t.cancel();
         }
       });
@@ -219,7 +260,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                 itemBuilder: (_, i) {
                   final d = _detected[i];
                   return ListTile(
-                    title: Text(d['device_signature']),
+                    title: Text(d['name'] ?? d['device_signature']),
                     subtitle: Text('${d['discovered_at']} - ${d['synced'] ? 'Synced' : d['approved'] ? 'Approved' : 'Pending'}'),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(i)),

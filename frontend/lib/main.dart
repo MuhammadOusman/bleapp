@@ -4,6 +4,7 @@ import 'screens/login_screen.dart';
 import 'screens/courses_screen.dart';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 // Values are sourced from .env (preferred). Fallbacks provided for convenience.
 void main() async {

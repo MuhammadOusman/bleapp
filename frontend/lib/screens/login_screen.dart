@@ -17,12 +17,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _showMessage(String s) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
 
-  Future<void> _doAuth(bool register) async {
+  Future<void> _doAuth(bool register, {String? fullName}) async {
     setState(() => _loading = true);
     final device = await DeviceService.getDeviceSignature();
     try {
       if (register) {
-        await _api.register(_emailCtrl.text.trim(), _passCtrl.text.trim(), device);
+        await _api.register(_emailCtrl.text.trim(), _passCtrl.text.trim(), device, fullName: fullName);
         _showMessage('Registered. Now login.');
       } else {
         final res = await _api.login(_emailCtrl.text.trim(), _passCtrl.text.trim(), device);
@@ -34,7 +34,8 @@ class _LoginScreenState extends State<LoginScreen> {
           _showMessage('Login failed');
         }
       }
-    } catch (e) {
+    } on Exception catch (e) {
+      // ApiException will be shown with friendly text in student flows; here, show message directly
       _showMessage(e.toString());
     } finally {
       setState(() => _loading = false);
@@ -58,7 +59,18 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   Expanded(child: ElevatedButton(onPressed: () => _doAuth(false), child: const Text('Login'))),
                   const SizedBox(width: 12),
-                  Expanded(child: OutlinedButton(onPressed: () => _doAuth(true), child: const Text('Register'))),
+                  Expanded(child: OutlinedButton(onPressed: () async {
+                    final TextEditingController nameCtrl = TextEditingController();
+                    final full = await showDialog<String>(context: context, builder: (_) => AlertDialog(
+                      title: const Text('Full name (students only)'),
+                      content: TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Full name')),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.of(context).pop(null), child: const Text('Skip')),
+                        ElevatedButton(onPressed: () => Navigator.of(context).pop(nameCtrl.text), child: const Text('OK')),
+                      ],
+                    ));
+                    await _doAuth(true, fullName: full?.trim());
+                  }, child: const Text('Register'))),
                 ],
               )
           ],
