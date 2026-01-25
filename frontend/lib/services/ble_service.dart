@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:beacon_broadcast/beacon_broadcast.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:crypto/crypto.dart';
 
 class BleService {
   final BeaconBroadcast _beacon = BeaconBroadcast();
@@ -19,6 +21,28 @@ class BleService {
     await _beacon.stop();
   }
 
+  // Start a short-lived beacon that advertises the device signature (peer beacon)
+  Future<void> startPeerBeacon(String deviceSignature) async {
+    final uuid = _uuidFromString(deviceSignature);
+    await _beacon
+        .setUUID(uuid)
+        .setMajorId(1)
+        .setMinorId(1)
+        .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
+        .start();
+  }
+
+  Future<void> stopPeerBeacon() async {
+    await _beacon.stop();
+  }
+
+  String _uuidFromString(String s) {
+    // Deterministically derive a UUID-like string from the input using MD5
+    final bytes = md5.convert(utf8.encode(s)).bytes;
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    // format 8-4-4-4-12
+    return '${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-${hex.substring(16,20)}-${hex.substring(20,32)}';
+  }
   /// Returns whether device supports BLE advertising (transmission)
   Future<bool> checkTransmissionSupport() async {
     try {

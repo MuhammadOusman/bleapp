@@ -17,4 +17,8 @@ router.post('/attendance/mark', authMiddleware, attendanceController.markAttenda
 // Teacher approval endpoint (approves by device_signature)
 router.post('/attendance/approve', authMiddleware, attendanceController.approveByTeacher);
 
+// Resolve an advertised string to a student profile (teacher helpers)
+const profilesController = require('../controllers/profilesController');
+router.post('/profiles/resolve', authMiddleware, profilesController.resolveByAdvertised);
+
 module.exports = router;

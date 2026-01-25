@@ -99,6 +99,25 @@ class ApiService {
     return _handle(res);
   }
 
+  // Resolve an advertised string to a profile (teacher helper)
+  Future<Map<String, dynamic>?> resolveAdvertised(String advertised) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+
+    try {
+      final res = await http.post(
+        Uri.parse('$backendBase/profiles/resolve'),
+        headers: headers,
+        body: jsonEncode({'advertised': advertised}),
+      );
+      final data = _handle(res);
+      return data['profile'] as Map<String, dynamic>?;
+    } catch (e) {
+      return null;
+    }
+  }
+
   Map<String, dynamic> _handle(http.Response res) {
     final body = res.body.isNotEmpty ? jsonDecode(res.body) as Map<String, dynamic> : <String, dynamic>{};
     if (res.statusCode >= 200 && res.statusCode < 300) {

@@ -160,9 +160,25 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
           'discovered_at': now,
           'approved': false,
           'synced': false,
+          'name': null,
+          'resolved': false,
         };
         setState(() => _detected.add(item));
         await LocalStore.addPending(item);
+
+        // Try to resolve the advertised string to a profile for better UX
+        try {
+          final profile = await _api.resolveAdvertised(sig);
+          if (profile != null) {
+            final idx = _detected.indexWhere((d) => d['device_signature'] == sig);
+            if (idx >= 0) {
+              _detected[idx]['name'] = profile['full_name'] ?? profile['email'] ?? 'Student';
+              _detected[idx]['resolved'] = true;
+              await LocalStore.updatePending(_detected);
+              if (mounted) setState(() {});
+            }
+          }
+        } catch (_) {}
       }
     });
 

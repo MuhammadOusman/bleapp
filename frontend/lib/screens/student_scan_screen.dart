@@ -34,10 +34,15 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
       return;
     }
 
+    // Start advertising the student's own signature briefly so teachers can detect it
+    final device = await DeviceService.getDeviceSignature();
+    try {
+      await _ble.startPeerBeacon(device);
+    } catch (_) {}
+
     _ble.startScan((sessionId) async {
       if (_found.isEmpty) {
         setState(() => _found = sessionId);
-        final device = await DeviceService.getDeviceSignature();
         try {
           await _api.markAttendance(sessionId, device);
           if (!mounted) return;
@@ -57,8 +62,11 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
       }
     });
     // stop after 20s by design
-    Timer(const Duration(seconds: 20), () {
+    Timer(const Duration(seconds: 20), () async {
       _ble.stopScan();
+      try {
+        await _ble.stopPeerBeacon();
+      } catch (_) {}
       setState(() => _scanning = false);
     });
   }
