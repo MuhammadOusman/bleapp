@@ -192,9 +192,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
     for (var item in approved) {
       try {
-        await _api.markAttendance(item['session_id'], item['device_signature']);
+        await _api.markAttendanceByTeacher(item['session_id'], item['device_signature']);
         item['synced'] = true;
-      } catch (e) {
+      } on Exception catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
       }
@@ -223,9 +223,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
     for (var item in toSync) {
       try {
-        await _api.markAttendance(item['session_id'], item['device_signature']);
+        await _api.markAttendanceByTeacher(item['session_id'], item['device_signature']);
         item['synced'] = true;
-      } catch (e) {
+      } on Exception catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
       }

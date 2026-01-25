@@ -85,6 +85,20 @@ class ApiService {
     return _handle(res);
   }
 
+  // Teacher API: approve attendance by device_signature (teacher-only)
+  Future<Map<String, dynamic>> markAttendanceByTeacher(String sessionId, String deviceSignature) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+
+    final res = await http.post(
+      Uri.parse('$backendBase/attendance/approve'),
+      headers: headers,
+      body: jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature}),
+    );
+    return _handle(res);
+  }
+
   Map<String, dynamic> _handle(http.Response res) {
     final body = res.body.isNotEmpty ? jsonDecode(res.body) as Map<String, dynamic> : <String, dynamic>{};
     if (res.statusCode >= 200 && res.statusCode < 300) {

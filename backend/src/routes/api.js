@@ -14,5 +14,7 @@ router.post('/login', authController.login);
 router.get('/courses', authMiddleware, courseController.getCourses);
 router.post('/sessions/start', authMiddleware, attendanceController.startSession);
 router.post('/attendance/mark', authMiddleware, attendanceController.markAttendance);
+// Teacher approval endpoint (approves by device_signature)
+router.post('/attendance/approve', authMiddleware, attendanceController.approveByTeacher);
 
 module.exports = router;
