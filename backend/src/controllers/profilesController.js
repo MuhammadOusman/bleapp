@@ -27,3 +27,15 @@ exports.resolveByAdvertised = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Return currently authenticated profile (used by admin app)
+exports.me = async (req, res) => {
+    try {
+        const user = req.user;
+        if (!user) return res.status(401).json({ error: 'Not authenticated' });
+        res.json({ profile: user });
+    } catch (err) {
+        console.error('profiles.me', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

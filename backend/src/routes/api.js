@@ -22,6 +22,7 @@ router.post('/attendance/approve_by_student', authMiddleware, attendanceControll
 // Resolve an advertised string to a student profile (teacher helpers)
 const profilesController = require('../controllers/profilesController');
 router.post('/profiles/resolve', authMiddleware, profilesController.resolveByAdvertised);
+router.get('/profiles/me', authMiddleware, profilesController.me);
 
 // Admin course CRUD (example skeleton)
 const courseAdminController = require('../controllers/courseAdminController');

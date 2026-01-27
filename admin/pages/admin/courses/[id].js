@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
+import ImportModal from './import-modal';
 const fetcher = url => axios.get(url).then(r => r.data);
 
 export default function CourseDetail({ query }) {
@@ -8,6 +9,7 @@ export default function CourseDetail({ query }) {
   const { data, error } = useSWR(`/api/admin/courses/${courseId}`, fetcher);
   const [enrollments, setEnrollments] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [bulk, setBulk] = useState(false);
   const [email, setEmail] = useState('');
   const [lms, setLms] = useState('');
 
@@ -38,6 +40,7 @@ export default function CourseDetail({ query }) {
       <h1>{data.course_name} ({data.course_code})</h1>
       <p>Teacher: {data.teacher_email}</p>
       <button onClick={()=>setShowModal(true)}>Enroll Student</button>
+      <button onClick={()=>setBulk(true)} style={{marginLeft:8}}>Bulk Import</button>
       <h2>Enrollments</h2>
       <table>
         <thead><tr><th>Name</th><th>Email</th><th>LMS ID</th><th>At</th></tr></thead>
@@ -57,6 +60,10 @@ export default function CourseDetail({ query }) {
             <div><button onClick={submitEnroll}>Enroll</button> <button onClick={()=>setShowModal(false)}>Cancel</button></div>
           </div>
         </div>
+      )}
+
+      {bulk && (
+        <ImportModal courseId={courseId} onClose={()=>setBulk(false)} onDone={async ()=>{ setBulk(false); const r = await axios.get(`/api/admin/courses/${courseId}/enrollments`); setEnrollments(r.data.data || []); }} />
       )}
     </div>
   );
