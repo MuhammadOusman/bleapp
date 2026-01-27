@@ -26,6 +26,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   Timer? _timer;
 
   bool _scanning = false;
+  // _students: list of enrolled students (populated when session starts)
+  List<Map<String, dynamic>> _students = []; // { student_id, name, present, discovered_at, synced }
+
+  // Detected devices that could not be resolved to an enrolled student
   List<Map<String, dynamic>> _detected = []; // { device_signature, discovered_at, approved, synced }
 
   StreamSubscription<dynamic>? _connSub;
@@ -79,6 +83,22 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       _sessionId = sid;
       _remaining = 15;
     });
+
+    // Load enrolled students for the course and initialize as absent
+    try {
+      final students = await _api.getCourseStudents(widget.course['id']);
+      setState(() {
+        _students = students.map<Map<String, dynamic>>((s) => {
+          'student_id': s['id'],
+          'name': (s['full_name'] ?? s['email'] ?? 'Student') as String,
+          'present': false,
+          'discovered_at': null,
+          'synced': false,
+        }).toList();
+      });
+    } catch (e) {
+      print('[Start] failed to load students: $e');
+    }
 
     // Poll attendance table every 2s for this session (simple realtime fallback)
     _realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
@@ -164,8 +184,48 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
         final sig = uuid;
         final now = DateTime.now().toIso8601String();
-        final exists = _detected.any((d) => d['device_signature'] == sig);
-        if (!exists) {
+
+        // Try resolving to a student profile
+        try {
+          final profile = await _api.resolveAdvertised(sig);
+          if (profile != null) {
+            // If the profile matches an enrolled student, mark them present
+            final idx = _students.indexWhere((s) => s['student_id'] == profile['id']);
+            if (idx >= 0) {
+              if (!_students[idx]['present']) {
+                _students[idx]['present'] = true;
+                _students[idx]['discovered_at'] = now;
+                _students[idx]['synced'] = false;
+                await LocalStore.updatePending(_students);
+                if (mounted) setState(() {});
+              }
+              return;
+            }
+
+            // Not enrolled in this course, add to unknown detected list
+            final exists = _detected.any((d) => d['device_signature'] == sig);
+            if (!exists) {
+              final item = {
+                'session_id': _sessionId,
+                'device_signature': sig,
+                'discovered_at': now,
+                'approved': false,
+                'synced': false,
+                'name': profile['full_name'] ?? profile['email'] ?? 'Student',
+                'resolved': true,
+              };
+              setState(() => _detected.add(item));
+              await LocalStore.addPending(item);
+            }
+            return;
+          }
+        } catch (e) {
+          print('[Scan] resolve error: $e');
+        }
+
+        // Fallback: add raw signature to unknown list
+        final exists2 = _detected.any((d) => d['device_signature'] == sig);
+        if (!exists2) {
           final item = {
             'session_id': _sessionId,
             'device_signature': sig,
@@ -177,20 +237,6 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
           };
           setState(() => _detected.add(item));
           await LocalStore.addPending(item);
-
-          // Try to resolve the advertised string to a profile for better UX
-          try {
-            final profile = await _api.resolveAdvertised(sig);
-            if (profile != null) {
-              final idx = _detected.indexWhere((d) => d['device_signature'] == sig);
-              if (idx >= 0) {
-                _detected[idx]['name'] = profile['full_name'] ?? profile['email'] ?? 'Student';
-                _detected[idx]['resolved'] = true;
-                await LocalStore.updatePending(_detected);
-                if (mounted) setState(() {});
-              }
-            }
-          } catch (_) {}
         }
       });
     } catch (e) {
@@ -253,6 +299,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   }
 
   Future<void> _syncApproved() async {
+    // Legacy: sync unknown detected devices approved by teacher
     final approved = _detected.where((d) => d['approved'] == true && d['synced'] != true).toList();
     if (approved.isEmpty) {
       if (!mounted) return;
@@ -270,6 +317,29 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       }
     }
     await LocalStore.updatePending(_detected);
+    setState(() {});
+  }
+
+  Future<void> _syncPresent() async {
+    if (_sessionId == null) return;
+    final toSync = _students.where((s) => s['present'] == true && s['synced'] != true).toList();
+    if (toSync.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No present students to sync')));
+      return;
+    }
+
+    for (var s in toSync) {
+      try {
+        await _api.approveStudentById(_sessionId!, s['student_id']);
+        s['synced'] = true;
+      } on Exception catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+      }
+    }
+
+    await LocalStore.updatePending(_students);
     setState(() {});
   }
 
@@ -370,23 +440,38 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
             ]),
             const SizedBox(height: 12),
             Expanded(
-              child: ListView.builder(
-                itemCount: _detected.length,
-                itemBuilder: (_, i) {
-                  final d = _detected[i];
-                  return ListTile(
-                    title: Text(d['name'] ?? d['device_signature']),
-                    subtitle: Text('${d['discovered_at']} - ${d['synced'] ? 'Synced' : d['approved'] ? 'Approved' : 'Pending'}'),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(i)),
-                      IconButton(icon: Icon(Icons.sync), onPressed: _syncApproved),
-                    ]),
-                  );
-                },
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    // Unknown detected devices
+                    ..._detected.map((d) => ListTile(
+                          title: Text(d['name'] ?? d['device_signature']),
+                          subtitle: Text('${d['discovered_at']} - ${d['synced'] ? 'Synced' : d['approved'] ? 'Approved' : 'Pending'}'),
+                          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                            IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
+                            IconButton(icon: Icon(Icons.sync), onPressed: _syncApproved),
+                          ]),
+                        )).toList(),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    Text('Enrolled Students', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    // Enrolled students list
+                    ..._students.map((s) => ListTile(
+                          title: Text(s['name'] ?? 'Student'),
+                          subtitle: Text(s['discovered_at'] ?? ''),
+                          leading: Checkbox(value: s['present'] == true, onChanged: (_) {
+                            setState(() => s['present'] = !(s['present'] == true));
+                          }),
+                          trailing: IconButton(icon: Icon(s['synced'] == true ? Icons.check : Icons.sync), onPressed: _syncPresent),
+                        )).toList(),
+                  ],
+                ),
               ),
             ),
+
             Row(children: [
-              ElevatedButton(onPressed: _syncApproved, child: const Text('Sync Approved')),
+              ElevatedButton(onPressed: _syncPresent, child: const Text('Sync Present')),
               const SizedBox(width: 12),
               ElevatedButton(onPressed: _syncAll, child: const Text('Retry All')),
             ]),

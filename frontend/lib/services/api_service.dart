@@ -72,6 +72,34 @@ class ApiService {
     return data['session_id'] as String;
   }
 
+  /// Get list of students enrolled in the course (backend will return all students until
+  /// enrollment mapping is added). Returns a list of maps with keys: id, full_name, email, lms_id
+  Future<List<dynamic>> getCourseStudents(String courseId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/courses/$courseId/students');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data['students'] as List<dynamic>?) ?? [];
+  }
+
+  /// Teacher: approve attendance for a student by id (manual or sync)
+  Future<Map<String, dynamic>> approveStudentById(String sessionId, String studentId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+
+    final url = Uri.parse('$backendBase/attendance/approve_by_student');
+    final body = jsonEncode({'session_id': sessionId, 'student_id': studentId});
+    _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
+    final res = await http.post(url, headers: headers, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    return _handle(res);
+  }
+
   Future<Map<String, dynamic>> markAttendance(String sessionId, String deviceSignature) async {
     final token = await storage.read(key: 'token');
     final headers = <String, String>{'Content-Type': 'application/json'};

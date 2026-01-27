@@ -96,3 +96,39 @@ exports.approveByTeacher = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Teacher-only endpoint: approve attendance by student_id
+exports.approveByStudent = async (req, res) => {
+    try {
+        const { session_id, student_id } = req.body;
+        const teacher = req.user;
+
+        if (teacher.role !== 'teacher') return res.status(403).json({ error: 'Only teachers can approve attendance' });
+        if (!session_id || !student_id) return res.status(400).json({ error: 'session_id and student_id are required' });
+
+        // Find session
+        const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
+        if (!session) return res.status(404).json({ error: 'Session not found' });
+        if (new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired (15s window closed)' });
+
+        // Find student profile
+        const { data: profiles } = await supabase.from('profiles').select('*').eq('id', student_id).limit(1);
+        const studentProfile = (profiles || [])[0];
+        if (!studentProfile) return res.status(404).json({ error: 'Student not found' });
+        if (studentProfile.role !== 'student') return res.status(400).json({ error: 'Target user is not a student' });
+
+        // Insert attendance
+        const { error: markError } = await supabase.from('attendance').insert([{
+            session_id,
+            student_id: studentProfile.id
+        }]);
+
+        if (markError?.code === '23505') return res.status(200).json({ message: 'Already marked' });
+        if (markError) return res.status(400).json({ error: markError.message });
+
+        return res.json({ success: true });
+    } catch (err) {
+        console.error('approveByStudent error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

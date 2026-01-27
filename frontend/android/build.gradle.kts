@@ -50,6 +50,15 @@ gradle.projectsEvaluated {
                 jvmTarget.set(JvmTarget.JVM_1_8)
             }
         }
+
+        // Ensure this plugin compiles against the same (newer) Android API level as the app
+        try {
+            p.plugins.withType(com.android.build.gradle.LibraryPlugin::class.java) {
+                p.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+                    compileSdk = 36
+                }
+            }
+        } catch (_: Throwable) {}
     }
 }
 
