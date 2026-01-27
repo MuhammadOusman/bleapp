@@ -158,8 +158,11 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
     setState(() { _scanning = true; });
     try {
-      _ble.startScan((s) async {
-        final sig = s;
+      _ble.startScan((uuid, minor) async {
+        // Filter for Student broadcasts only
+        if (minor != BleService.kStudentMinorId) return;
+
+        final sig = uuid;
         final now = DateTime.now().toIso8601String();
         final exists = _detected.any((d) => d['device_signature'] == sig);
         if (!exists) {
@@ -324,9 +327,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     // scan for 5 seconds to detect our own adv
     bool found = false;
     final completer = Completer<bool>();
-    _ble.startScan((s) async {
-      print('[Check] scan callback saw: $s');
-      if (s.toLowerCase().contains(sid.substring(0, 8))) {
+    _ble.startScan((uuid, minor) async {
+      print('[Check] scan callback saw: $uuid minor: $minor');
+      if (uuid.toLowerCase() == sid.toLowerCase() && minor == BleService.kTeacherMinorId) {
         found = true;
         if (!completer.isCompleted) completer.complete(true);
       }
