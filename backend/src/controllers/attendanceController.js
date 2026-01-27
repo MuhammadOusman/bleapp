@@ -81,11 +81,10 @@ exports.approveByTeacher = async (req, res) => {
             return res.status(400).json({ error: 'Target user is not a student' });
         }
 
-        // Insert attendance record for the student
+        // Insert attendance record for the student (do NOT assume device_signature column exists)
         const { error: markError } = await supabase.from('attendance').insert([{
             session_id,
-            student_id: studentProfile.id,
-            device_signature: device_signature
+            student_id: studentProfile.id
         }]);
 
         if (markError?.code === '23505') return res.status(200).json({ message: 'Already marked' });

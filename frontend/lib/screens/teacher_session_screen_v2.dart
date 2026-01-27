@@ -83,8 +83,14 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     // Poll attendance table every 2s for this session (simple realtime fallback)
     _realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
       try {
-        final resp = await Supabase.instance.client.from('attendance').select('id,student_id,created_at,device_signature').eq('session_id', sid);
+        final resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at,device_signature').eq('session_id', sid);
+        // Debugging: log raw response and type
+        try {
+          print('[Poll] rawResp type=${resp.runtimeType} value=$resp');
+        } catch (_) {}
+
         final rows = (resp as List<dynamic>?) ?? [];
+        print('[Poll] fetched ${rows.length} rows for session=$sid');
         for (var r in rows) {
           final studentId = r['student_id'];
           final exists = _detected.any((d) => d['student_id'] == studentId);
@@ -98,7 +104,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                 'session_id': sid,
                 'student_id': studentId,
                 'device_signature': r['device_signature'] ?? 'unknown',
-                'discovered_at': r['created_at'] ?? DateTime.now().toIso8601String(),
+                'discovered_at': r['marked_at'] ?? DateTime.now().toIso8601String(),
                 'approved': true,
                 'synced': true,
                 'name': name,
@@ -106,7 +112,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
             });
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        print('[Poll] error: $e');
+      }
     });
     final status = await _ble.checkTransmissionSupport();
     if (!status) {
@@ -149,38 +157,44 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
 
     setState(() { _scanning = true; });
-    _ble.startScan((s) async {
-      final sig = s;
-      final now = DateTime.now().toIso8601String();
-      final exists = _detected.any((d) => d['device_signature'] == sig);
-      if (!exists) {
-        final item = {
-          'session_id': _sessionId,
-          'device_signature': sig,
-          'discovered_at': now,
-          'approved': false,
-          'synced': false,
-          'name': null,
-          'resolved': false,
-        };
-        setState(() => _detected.add(item));
-        await LocalStore.addPending(item);
+    try {
+      _ble.startScan((s) async {
+        final sig = s;
+        final now = DateTime.now().toIso8601String();
+        final exists = _detected.any((d) => d['device_signature'] == sig);
+        if (!exists) {
+          final item = {
+            'session_id': _sessionId,
+            'device_signature': sig,
+            'discovered_at': now,
+            'approved': false,
+            'synced': false,
+            'name': null,
+            'resolved': false,
+          };
+          setState(() => _detected.add(item));
+          await LocalStore.addPending(item);
 
-        // Try to resolve the advertised string to a profile for better UX
-        try {
-          final profile = await _api.resolveAdvertised(sig);
-          if (profile != null) {
-            final idx = _detected.indexWhere((d) => d['device_signature'] == sig);
-            if (idx >= 0) {
-              _detected[idx]['name'] = profile['full_name'] ?? profile['email'] ?? 'Student';
-              _detected[idx]['resolved'] = true;
-              await LocalStore.updatePending(_detected);
-              if (mounted) setState(() {});
+          // Try to resolve the advertised string to a profile for better UX
+          try {
+            final profile = await _api.resolveAdvertised(sig);
+            if (profile != null) {
+              final idx = _detected.indexWhere((d) => d['device_signature'] == sig);
+              if (idx >= 0) {
+                _detected[idx]['name'] = profile['full_name'] ?? profile['email'] ?? 'Student';
+                _detected[idx]['resolved'] = true;
+                await LocalStore.updatePending(_detected);
+                if (mounted) setState(() {});
+              }
             }
-          }
-        } catch (_) {}
-      }
-    });
+          } catch (_) {}
+        }
+      });
+    } catch (e) {
+      // Friendly message when Bluetooth is off
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth must be turned on to scan.')));
+    }
 
     Timer(const Duration(seconds: 20), () async {
       _ble.stopScan();
@@ -191,6 +205,43 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   Future<void> _loadPending() async {
     final items = await LocalStore.loadPending();
     setState(() => _detected = items);
+  }
+
+  Future<void> _refreshAttendance() async {
+    if (_sessionId == null) return;
+    final sid = _sessionId!;
+    try {
+      final resp = await Supabase.instance.client.from('attendance').select('id,student_id,created_at').eq('session_id', sid);
+      print('[Refresh] rawResp type=${resp.runtimeType} value=$resp');
+      final rows = (resp as List<dynamic>?) ?? [];
+      print('[Refresh] fetched ${rows.length} rows');
+      for (var r in rows) {
+        final studentId = r['student_id'];
+        final exists = _detected.any((d) => d['student_id'] == studentId);
+        if (!exists) {
+          final profileRes = await Supabase.instance.client.from('profiles').select('id,full_name').eq('id', studentId).limit(1);
+          final profiles = (profileRes as List<dynamic>?) ?? [];
+          final name = profiles.isNotEmpty ? (profiles[0]['full_name'] as String? ?? 'Student') : 'Student';
+          setState(() {
+            _detected.add({
+              'session_id': _sessionId ?? '',
+              'student_id': studentId,
+                'device_signature': 'unknown', // device_signature column not present in DB
+              'discovered_at': r['created_at'] ?? DateTime.now().toIso8601String(),
+              'approved': true,
+              'synced': true,
+              'name': name,
+            });
+          });
+        }
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Refreshed: ${rows.length} rows found')));
+    } catch (e) {
+      print('[Refresh] error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Refresh failed: $e')));
+    }
   }
 
   Future<void> _toggleApprove(int idx) async {
@@ -250,6 +301,47 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     setState(() {});
   }
 
+  Future<void> _checkAdvertise() async {
+    // Quick roundtrip test: start beacon and scan locally
+    final token = await _storage.read(key: 'token');
+    if (_sessionId == null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Start a session first')));
+      return;
+    }
+    final sid = _sessionId!;
+    final canAdvertise = await _ble.checkTransmissionSupport();
+    if (!canAdvertise) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device does not support advertising')));
+      return;
+    }
+
+    final started = await _ble.startBeacon(sid);
+    if (!started) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Beacon start failed')));
+      return;
+    }
+
+    // scan for 5 seconds to detect our own adv
+    bool found = false;
+    final completer = Completer<bool>();
+    _ble.startScan((s) async {
+      print('[Check] scan callback saw: $s');
+      if (s.toLowerCase().contains(sid.substring(0, 8))) {
+        found = true;
+        if (!completer.isCompleted) completer.complete(true);
+      }
+    });
+
+    Future.delayed(const Duration(seconds: 5), () async {
+      _ble.stopScan();
+      await _ble.stopBeacon();
+      if (!completer.isCompleted) completer.complete(found);
+    });
+
+    final res = await completer.future;
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res ? 'Advertising detected locally' : 'No local advertisement detected')));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -268,6 +360,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
               ElevatedButton(onPressed: _startSession, child: const Text('Start 15s Attendance')),
               const SizedBox(width: 12),
               ElevatedButton(onPressed: _scanning ? null : _startScanForStudents, child: Text(_scanning ? 'Scanning...' : 'Scan for Students')),
+              const SizedBox(width: 12),
+              ElevatedButton(onPressed: _sessionId == null ? null : _refreshAttendance, child: const Text('Refresh Attendance Now')),
+              const SizedBox(width: 12),
+              ElevatedButton(onPressed: _checkAdvertise, child: const Text('Check Advertising')),
             ]),
             const SizedBox(height: 12),
             Expanded(

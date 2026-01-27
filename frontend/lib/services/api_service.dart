@@ -16,30 +16,33 @@ class ApiException implements Exception {
 class ApiService {
   final storage = const FlutterSecureStorage();
 
+  void _log(String msg) {
+    try {
+      // Keep logs helpful but concise
+      print('[API] $msg');
+    } catch (_) {}
+  }
+
   Future<Map<String, dynamic>> register(String email, String password, String deviceSignature, {String? fullName}) async {
-    final res = await http.post(
-      Uri.parse('$backendBase/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-        'device_signature': deviceSignature,
-        if (fullName != null) 'full_name': fullName,
-      }),
-    );
+    final url = Uri.parse('$backendBase/register');
+    final body = jsonEncode({
+      'email': email,
+      'password': password,
+      'device_signature': deviceSignature,
+      if (fullName != null) 'full_name': fullName,
+    });
+    _log('POST $url body=${body.length} bytes');
+    final res = await http.post(url, headers: {'Content-Type': 'application/json'}, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
     return _handle(res);
   }
 
   Future<Map<String, dynamic>> login(String email, String password, String deviceSignature) async {
-    final res = await http.post(
-      Uri.parse('$backendBase/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-        'device_signature': deviceSignature,
-      }),
-    );
+    final url = Uri.parse('$backendBase/login');
+    final body = jsonEncode({'email': email, 'password': password, 'device_signature': deviceSignature});
+    _log('POST $url body=${body.length} bytes');
+    final res = await http.post(url, headers: {'Content-Type': 'application/json'}, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
     final data = _handle(res);
     if (data.containsKey('token')) {
       await storage.write(key: 'token', value: data['token']);
@@ -51,23 +54,20 @@ class ApiService {
   }
 
   Future<List<dynamic>> getCourses(String token) async {
-    final res = await http.get(
-      Uri.parse('$backendBase/courses'),
-      headers: {'Authorization': 'Bearer $token'},
-    );
+    final url = Uri.parse('$backendBase/courses');
+    _log('GET $url');
+    final res = await http.get(url, headers: {'Authorization': 'Bearer $token'});
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes body=${res.body}');
     final data = _handle(res);
-    return data as List<dynamic>;
+    return (data ?? []) as List<dynamic>;
   }
 
   Future<String> startSession(String token, String courseId, int sessionNumber) async {
-    final res = await http.post(
-      Uri.parse('$backendBase/sessions/start'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token'
-      },
-      body: jsonEncode({'course_id': courseId, 'session_number': sessionNumber}),
-    );
+    final url = Uri.parse('$backendBase/sessions/start');
+    final body = jsonEncode({'course_id': courseId, 'session_number': sessionNumber});
+    _log('POST $url body=${body.length} bytes');
+    final res = await http.post(url, headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
     final data = _handle(res);
     return data['session_id'] as String;
   }
@@ -77,11 +77,11 @@ class ApiService {
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null) headers['Authorization'] = 'Bearer $token';
 
-    final res = await http.post(
-      Uri.parse('$backendBase/attendance/mark'),
-      headers: headers,
-      body: jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature}),
-    );
+    final url = Uri.parse('$backendBase/attendance/mark');
+    final body = jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature});
+    _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
+    final res = await http.post(url, headers: headers, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
     return _handle(res);
   }
 
@@ -91,11 +91,11 @@ class ApiService {
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null) headers['Authorization'] = 'Bearer $token';
 
-    final res = await http.post(
-      Uri.parse('$backendBase/attendance/approve'),
-      headers: headers,
-      body: jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature}),
-    );
+    final url = Uri.parse('$backendBase/attendance/approve');
+    final body = jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature});
+    _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
+    final res = await http.post(url, headers: headers, body: body);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
     return _handle(res);
   }
 
@@ -118,11 +118,13 @@ class ApiService {
     }
   }
 
-  Map<String, dynamic> _handle(http.Response res) {
-    final body = res.body.isNotEmpty ? jsonDecode(res.body) as Map<String, dynamic> : <String, dynamic>{};
+  dynamic _handle(http.Response res) {
+    final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body;
     }
-    throw ApiException(res.statusCode, body);
+    // Normalize body for error reporting
+    final errBody = (body is Map<String, dynamic>) ? body : {'error': body?.toString()};
+    throw ApiException(res.statusCode, errBody);
   }
 }

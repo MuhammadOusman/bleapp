@@ -7,33 +7,59 @@ import 'package:crypto/crypto.dart';
 class BleService {
   final BeaconBroadcast _beacon = BeaconBroadcast();
 
-  Future<void> startBeacon(String sessionId) async {
+  Future<bool> startBeacon(String sessionId) async {
     // Use sessionId as the UUID for the beacon (iBeacon formatted UUID expected)
-    await _beacon
-        .setUUID(sessionId)
-        .setMajorId(1)
-        .setMinorId(1)
-        .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
-        .start();
+    try {
+      print('[Becon] starting beacon uuid=$sessionId');
+      await _beacon
+          .setUUID(sessionId)
+          .setMajorId(1)
+          .setMinorId(1)
+          .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
+          .start();
+      print('[Becon] started');
+      return true;
+    } catch (e) {
+      print('[Becon] start failed: $e');
+      return false;
+    }
   }
 
   Future<void> stopBeacon() async {
-    await _beacon.stop();
+    try {
+      await _beacon.stop();
+      print('[Becon] stopped');
+    } catch (e) {
+      print('[Becon] stop failed: $e');
+    }
   }
 
   // Start a short-lived beacon that advertises the device signature (peer beacon)
-  Future<void> startPeerBeacon(String deviceSignature) async {
+  Future<bool> startPeerBeacon(String deviceSignature) async {
     final uuid = _uuidFromString(deviceSignature);
-    await _beacon
-        .setUUID(uuid)
-        .setMajorId(1)
-        .setMinorId(1)
-        .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
-        .start();
+    try {
+      print('[PeerBeacon] start peer uuid=$uuid');
+      await _beacon
+          .setUUID(uuid)
+          .setMajorId(1)
+          .setMinorId(1)
+          .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
+          .start();
+      print('[PeerBeacon] started');
+      return true;
+    } catch (e) {
+      print('[PeerBeacon] start failed: $e');
+      return false;
+    }
   }
 
   Future<void> stopPeerBeacon() async {
-    await _beacon.stop();
+    try {
+      await _beacon.stop();
+      print('[PeerBeacon] stopped');
+    } catch (e) {
+      print('[PeerBeacon] stop failed: $e');
+    }
   }
 
   String _uuidFromString(String s) {
@@ -56,8 +82,24 @@ class BleService {
 
   StreamSubscription<List<ScanResult>>? _scanResultsSub;
 
+  String? _parseIBeaconUuid(List<int> bytes) {
+    // Search for iBeacon prefix 0x02 0x15 and extract the 16-byte UUID that follows
+    try {
+      for (var i = 0; i <= bytes.length - 18; i++) {
+        if (bytes[i] == 0x02 && bytes[i + 1] == 0x15) {
+          final uuidBytes = bytes.sublist(i + 2, i + 18);
+          final hex = uuidBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+          final uuid = '${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-${hex.substring(16,20)}-${hex.substring(20,32)}';
+          return uuid;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   void startScan(void Function(String sessionId) onFound) {
     // Start platform scan and listen to aggregated scan results
+    print('[Scan] startScan requested');
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 20));
 
     _scanResultsSub = FlutterBluePlus.scanResults.listen((results) {
@@ -65,8 +107,9 @@ class BleService {
         final adv = r.advertisementData;
         final advName = adv.advName;
         final name = advName.isNotEmpty ? advName : r.device.platformName;
+        print('[Scan] device=${r.device.id} rssi=${r.rssi} name=$name advName=$advName');
 
-        // Prefer manufacturer data if available
+        // Prefer manufacturer data if available (iBeacon detection)
         try {
           final m = adv.manufacturerData;
           if (m.isNotEmpty) {
@@ -74,26 +117,54 @@ class BleService {
               final id = entry.key;
               final bytes = entry.value;
               final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-              final sig = '${id.toRadixString(16)}:$hex';
-              onFound(sig);
+              final sigRaw = '${id.toRadixString(16)}:$hex';
+              print('[Scan] found manufacturer raw=$sigRaw from ${r.device.id}');
+
+              final parsed = _parseIBeaconUuid(bytes);
+              if (parsed != null) {
+                print('[Scan] parsed iBeacon UUID=$parsed');
+                onFound(parsed);
+              } else {
+                // fallback to raw manufacturer string if parsing didn't find iBeacon
+                onFound(sigRaw);
+              }
             }
             continue;
           }
-        } catch (_) {}
+        } catch (e) {
+          print('[Scan] manufacturer parse error: $e');
+        }
 
-        // service UUIDs
+        // service UUIDs (prefer full UUIDs)
         try {
           if (adv.serviceUuids.isNotEmpty) {
             for (var su in adv.serviceUuids) {
               final s = su.toString();
-              if (s.isNotEmpty) onFound(s);
+              print('[Scan] found service uuid=$s from ${r.device.id}');
+              if (s.length >= 36) {
+                // likely a full UUID
+                onFound(s);
+                continue;
+              }
             }
-            continue;
           }
-        } catch (_) {}
+        } catch (e) {
+          print('[Scan] serviceUuids parse error: $e');
+        }
 
-        // fallback to name
-        if (name.isNotEmpty) onFound(name);
+        // fallback to name (if looks like UUID)
+        final uuidRegex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+        if (advName.isNotEmpty && uuidRegex.hasMatch(advName)) {
+          print('[Scan] advName looks like UUID: $advName');
+          onFound(advName);
+          continue;
+        }
+
+        // final fallback to name
+        if (name.isNotEmpty) {
+          print('[Scan] fallback name found: $name');
+          onFound(name);
+        }
       }
     });
   }

@@ -41,23 +41,43 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
     } catch (_) {}
 
     _ble.startScan((sessionId) async {
+      // Try to extract a UUID from possible manufacturer/service data
+      final uuidRegex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+      String? candidate = sessionId;
+
+      if (!uuidRegex.hasMatch(sessionId)) {
+        // remove any non-hex chars and try to build a UUID from first 32 hex chars
+        final hexOnly = sessionId.replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
+        if (hexOnly.length >= 32) {
+          final hexCandidate = hexOnly.substring(0, 32);
+          final parsed = '${hexCandidate.substring(0,8)}-${hexCandidate.substring(8,12)}-${hexCandidate.substring(12,16)}-${hexCandidate.substring(16,20)}-${hexCandidate.substring(20,32)}';
+          if (uuidRegex.hasMatch(parsed)) candidate = parsed;
+        }
+      }
+
       if (_found.isEmpty) {
-        setState(() => _found = sessionId);
-        try {
-          await _api.markAttendance(sessionId, device);
+        setState(() => _found = candidate ?? sessionId);
+        if (candidate != null && uuidRegex.hasMatch(candidate)) {
+          try {
+            await _api.markAttendance(candidate, device);
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Marked present')));
+          } on ApiException catch (e) {
+            final msg = e.statusCode == 410
+                ? 'Too late! Session expired.'
+                : e.statusCode == 403
+                    ? 'Account locked to another device.'
+                    : e.toString();
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+          }
+        } else {
+          // couldn't parse a UUID; show a warning so user knows parsing failed
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Marked present')));
-        } on ApiException catch (e) {
-          final msg = e.statusCode == 410
-              ? 'Too late! Session expired.'
-              : e.statusCode == 403
-                  ? 'Account locked to another device.'
-                  : e.toString();
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        } catch (e) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No valid session UUID found in advertisement')));
         }
       }
     });

@@ -26,8 +26,19 @@ class _LoginScreenState extends State<LoginScreen> {
         _showMessage('Registered. Now login.');
       } else {
         final res = await _api.login(_emailCtrl.text.trim(), _passCtrl.text.trim(), device);
+        // Debug: log response
+        print('[Login] response: $res');
         if (res.containsKey('token')) {
+          final role = res['profile']?['role'] ?? 'student';
+          final token = res['token'];
+          print('[Login] token: ${token.toString().substring(0, token.toString().length > 8 ? 8 : token.toString().length)}... role: $role');
           if (!mounted) return;
+          // Show a small dialog confirming role for debugging
+          showDialog(context: context, builder: (_) => AlertDialog(
+            title: const Text('Login Success'),
+            content: Text('Role: $role'),
+            actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
+          ));
           Navigator.of(context).pushReplacementNamed('/courses');
         } else {
           if (!mounted) return;
