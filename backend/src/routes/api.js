@@ -6,6 +6,7 @@ const authController = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
 const courseController = require('../controllers/courseController');
 const attendanceController = require('../controllers/attendanceController');
+const adminMiddleware = require('../middleware/adminMiddleware');
 
 router.post('/register', authController.register);
 router.post('/login', authController.login);
@@ -35,7 +36,6 @@ router.get('/admin/courses', authMiddleware, adminMiddleware, courseAdminControl
 router.get('/courses/:id/students', authMiddleware, require('../controllers/courseController').getCourseStudents);
 
 // Admin routes - require admin role where specified
-const adminMiddleware = require('../middleware/adminMiddleware');
 const enrollmentController = require('../controllers/enrollmentController');
 
 router.get('/courses/:id/enrollments', authMiddleware, enrollmentController.listEnrollments);
