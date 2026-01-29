@@ -11,7 +11,8 @@ import 'attendance_review_screen.dart';
 
 class TeacherSessionScreenV2 extends StatefulWidget {
   final Map course;
-  const TeacherSessionScreenV2({super.key, required this.course});
+  final String? initialSessionId;
+  const TeacherSessionScreenV2({super.key, required this.course, this.initialSessionId});
 
   @override
   State<TeacherSessionScreenV2> createState() => _TeacherSessionScreenV2State();
@@ -56,7 +57,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     _loadSessionCount();
 
     _connSub = Connectivity().onConnectivityChanged.listen((dynamic result) {
-      // On some platforms the stream emits a List<ConnectivityResult>, on others a single ConnectivityResult
+      // On some platforms the stream emits a List<ConnectivityResult), on others a single ConnectivityResult
       if (result is List) {
         final anyOnline = result.any((r) => r != ConnectivityResult.none);
         if (anyOnline) _autoSync();
@@ -67,6 +68,13 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
     // On startup check for unsynced snapshots and trigger sync check
     _checkUnsyncedSnapshots();
+
+    // If this screen was opened with an existing session ID (started from course list), attach to it
+    if (widget.initialSessionId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _onSessionStarted(widget.initialSessionId!);
+      });
+    }
   }
 
   @override
@@ -98,6 +106,11 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
 
     final sid = await _api.startSession(token, widget.course['id'], 1);
+    await _onSessionStarted(sid);
+  }
+
+  /// Common flow for after a session id exists (either started here or passed-in)
+  Future<void> _onSessionStarted(String sid) async {
     setState(() {
       _sessionId = sid;
     });
@@ -516,14 +529,21 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                     setState(() { _sessionId = null; /* preserve students for review navigation */ });
 
                     if (sessId != null) {
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => AttendanceReviewScreen(
+                      // Open review screen and wait for it to close, then pop this screen
+                      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => AttendanceReviewScreen(
                         course: widget.course,
                         sessionId: sessId,
                         sessionNumber: _sessionsDisplayCount(),
                         students: _students,
                       )));
-                      // Reset elapsed and students only after returning from review if needed
+
+                      // Reset elapsed and students, and pop with result=true to notify caller to refresh
                       _elapsedSeconds = 0;
+                      if (mounted) {
+                        // Clear local session state and return true to the caller
+                        setState(() => _sessionId = null);
+                        Navigator.of(context).pop(true);
+                      }
                     }
                   } : null,
                   child: const Text('End Attendance'),

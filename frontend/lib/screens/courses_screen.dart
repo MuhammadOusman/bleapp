@@ -3,7 +3,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../services/sync_service.dart';
-import 'teacher_session_screen_v2.dart';
 import 'student_session_scanner.dart';
 import 'teacher_dashboard.dart';
 
@@ -24,6 +23,10 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Map<String, int> _sessionCounts = {}; // course_id -> count
   Map<String, Map<String, dynamic>> _courseDetails = {}; // course_id -> details (teacher, totals)
 
+  // Student-specific state
+  List _enrolledCourses = [];
+  int _enrolledSessionsTotal = 0;
+  int _enrolledAttendanceTotal = 0;
   // Search state for courses list
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
@@ -113,7 +116,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
   void _onCourseTap(Map course) {
     if (_role == 'teacher') {
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => TeacherSessionScreenV2(course: course)));
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => CourseSessionsScreen(course: course)));
     } else {
       // Students should use the scanner entrypoint instead of opening a course
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StudentSessionScanner()));

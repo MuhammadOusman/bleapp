@@ -57,4 +57,11 @@ class LocalStore {
   static Future<void> updateAttendanceSnapshots(List<Map<String, dynamic>> items) async {
     await saveAttendanceSnapshots(items);
   }
+
+  /// Remove any saved attendance snapshots that match the given session id
+  static Future<void> removeAttendanceSnapshotsForSession(String sessionId) async {
+    final list = await loadAttendanceSnapshots();
+    final filtered = list.where((s) => (s['session_id'] as String?) != sessionId).toList();
+    await saveAttendanceSnapshots(filtered);
+  }
 }

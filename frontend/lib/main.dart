@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/login_screen.dart';
 import 'screens/courses_screen.dart';
+import 'screens/teacher_dashboard.dart';
 import 'widgets/bluetooth_gate.dart';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -67,6 +68,7 @@ class MyApp extends StatelessWidget {
       routes: {
         '/': (context) => const LoginScreen(),
         '/courses': (context) => const CoursesScreen(),
+        '/dashboard': (context) => const TeacherDashboardScreen(),
       },
       // Insert the Bluetooth gate into the built widget tree so Theme / Directionality
       // are available to the gate's overlay UI. The child passed to builder is the

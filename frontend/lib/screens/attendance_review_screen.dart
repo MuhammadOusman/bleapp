@@ -9,8 +9,9 @@ class AttendanceReviewScreen extends StatefulWidget {
   final String sessionId;
   final int sessionNumber;
   final List<Map<String, dynamic>> students;
+  final bool autoSave;
 
-  const AttendanceReviewScreen({super.key, required this.course, required this.sessionId, required this.sessionNumber, required this.students});
+  const AttendanceReviewScreen({super.key, required this.course, required this.sessionId, required this.sessionNumber, required this.students, this.autoSave = false});
 
   @override
   State<AttendanceReviewScreen> createState() => _AttendanceReviewScreenState();
@@ -25,6 +26,28 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   void initState() {
     super.initState();
     _students = widget.students.map((s) => Map<String, dynamic>.from(s)).toList();
+
+    // If caller requested auto-save, trigger save after first frame so
+    // UI is fully built and SnackBars/dialogs work correctly.
+    if (widget.autoSave == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        // Ask for confirmation before auto-saving
+        final choice = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Confirm Save'),
+            content: const Text('Save attendance now? This will upload attendance and finalize the session.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+              ElevatedButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Confirm')),
+            ],
+          ),
+        );
+        if (choice == true) {
+          await _saveAttendance();
+        }
+      });
+    }
   }
 
   Future<void> _saveAttendance() async {
@@ -65,6 +88,12 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
           await _api.approveStudentById(snapshot['session_id'], s['student_id']);
         }
       }
+
+      // On success, ensure any local snapshot for this session is removed
+      try {
+        await LocalStore.removeAttendanceSnapshotsForSession(snapshot['session_id']);
+      } catch (_) {}
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance saved and synced')));
       setState(() => _saving = false);

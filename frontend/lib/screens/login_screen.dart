@@ -39,7 +39,9 @@ class _LoginScreenState extends State<LoginScreen> {
             content: Text('Role: $role'),
             actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
           ));
-          Navigator.of(context).pushReplacementNamed('/courses');
+          // Route teachers directly to the dashboard; students to the courses screen
+          final r = (role.toString().toLowerCase() == 'teacher') ? '/dashboard' : '/courses';
+          Navigator.of(context).pushReplacementNamed(r);
         } else {
           if (!mounted) return;
           _showMessage('Login failed');
