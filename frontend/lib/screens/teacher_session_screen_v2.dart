@@ -117,7 +117,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
         }).toList();
       });
     } catch (e) {
-      print('[Start] failed to load students: $e');
+      debugPrint('[Start] failed to load students: $e');
     }
 
     // Poll attendance table every 2s for this session (simple realtime fallback)
@@ -126,11 +126,11 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
         final resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at,device_signature').eq('session_id', sid);
         // Debugging: log raw response and type
         try {
-          print('[Poll] rawResp type=${resp.runtimeType} value=$resp');
+          debugPrint('[Poll] rawResp type=${resp.runtimeType} value=$resp');
         } catch (_) {}
 
         final rows = (resp as List<dynamic>?) ?? [];
-        print('[Poll] fetched ${rows.length} rows for session=$sid');
+        debugPrint('[Poll] fetched ${rows.length} rows for session=$sid');
         for (var r in rows) {
           final studentId = r['student_id'];
           final exists = _detected.any((d) => d['student_id'] == studentId);
@@ -153,7 +153,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
           }
         }
       } catch (e) {
-        print('[Poll] error: $e');
+        debugPrint('[Poll] error: $e');
       }
     });
     final status = await _ble.checkTransmissionSupport();
@@ -236,7 +236,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
             return;
           }
         } catch (e) {
-          print('[Scan] resolve error: $e');
+          debugPrint('[Scan] resolve error: $e');
         }
 
         // Fallback: add raw signature to unknown list
@@ -278,49 +278,14 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     _loadSessionCount();
   }
 
-  Future<void> _refreshAttendance() async {
-    if (_sessionId == null) return;
-    final sid = _sessionId!;
-    try {
-      final resp = await Supabase.instance.client.from('attendance').select('id,student_id,created_at').eq('session_id', sid);
-      print('[Refresh] rawResp type=${resp.runtimeType} value=$resp');
-      final rows = (resp as List<dynamic>?) ?? [];
-      print('[Refresh] fetched ${rows.length} rows');
-      for (var r in rows) {
-        final studentId = r['student_id'];
-        final exists = _detected.any((d) => d['student_id'] == studentId);
-        if (!exists) {
-          final profileRes = await Supabase.instance.client.from('profiles').select('id,full_name').eq('id', studentId).limit(1);
-          final profiles = (profileRes as List<dynamic>?) ?? [];
-          final name = profiles.isNotEmpty ? (profiles[0]['full_name'] as String? ?? 'Student') : 'Student';
-          setState(() {
-            _detected.add({
-              'session_id': _sessionId ?? '',
-              'student_id': studentId,
-                'device_signature': 'unknown', // device_signature column not present in DB
-              'discovered_at': r['created_at'] ?? DateTime.now().toIso8601String(),
-              'approved': true,
-              'synced': true,
-              'name': name,
-            });
-          });
-        }
-      }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Refreshed: ${rows.length} rows found')));
-    } catch (e) {
-      print('[Refresh] error: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Refresh failed: $e')));
-    }
-  }
+
 
   Future<void> _loadSessionCount() async {
     try {
       final cnt = await _api.getSessionCount(widget.course['id']);
       if (mounted) setState(() => _sessionsCount = cnt);
     } catch (e) {
-      print('[SessionCount] failed to load for course ${widget.course['id']}: $e');
+      debugPrint('[SessionCount] failed to load for course ${widget.course['id']}: $e');
     }
   }
 
@@ -359,28 +324,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     setState(() {});
   }
 
-  Future<void> _syncPresent() async {
-    if (_sessionId == null) return;
-    final toSync = _students.where((s) => s['present'] == true && s['synced'] != true).toList();
-    if (toSync.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No present students to sync')));
-      return;
-    }
 
-    for (var s in toSync) {
-      try {
-        await _api.approveStudentById(_sessionId!, s['student_id']);
-        s['synced'] = true;
-      } on Exception catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-      }
-    }
-
-    await LocalStore.updatePending(_students);
-    setState(() {});
-  }
 
   Future<void> _autoSync() async {
     if (_syncing) return;
@@ -422,26 +366,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance sync complete')));
   }
 
-  Future<void> _syncAll() async {
-    final pending = await LocalStore.loadPending();
-    final toSync = pending.where((d) => d['synced'] != true).toList();
-    if (toSync.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No items to sync')));
-      return;
-    }
-    for (var item in toSync) {
-      try {
-        await _api.markAttendanceByTeacher(item['session_id'], item['device_signature']);
-        item['synced'] = true;
-      } on Exception catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-      }
-    }
-    await LocalStore.updatePending(_detected);
-    setState(() {});
-  }
+
 
   Future<void> _checkUnsyncedSnapshots() async {
     try {
@@ -456,46 +381,8 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
   }
 
-  Future<void> _checkAdvertise() async {
-    // Quick roundtrip test: start beacon and scan locally
-    final token = await _storage.read(key: 'token');
-    if (_sessionId == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Start a session first')));
-      return;
-    }
-    final sid = _sessionId!;
-    final canAdvertise = await _ble.checkTransmissionSupport();
-    if (!canAdvertise) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device does not support advertising')));
-      return;
-    }
 
-    final started = await _ble.startBeacon(sid);
-    if (!started) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Beacon start failed')));
-      return;
-    }
 
-    // scan for 5 seconds to detect our own adv
-    bool found = false;
-    final completer = Completer<bool>();
-    _ble.startScan((uuid, minor) async {
-      print('[Check] scan callback saw: $uuid minor: $minor');
-      if (uuid.toLowerCase() == sid.toLowerCase() && minor == BleService.kTeacherMinorId) {
-        found = true;
-        if (!completer.isCompleted) completer.complete(true);
-      }
-    });
-
-    Future.delayed(const Duration(seconds: 5), () async {
-      _ble.stopScan();
-      await _ble.stopBeacon();
-      if (!completer.isCompleted) completer.complete(found);
-    });
-
-    final res = await completer.future;
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res ? 'Advertising detected locally' : 'No local advertisement detected')));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -599,7 +486,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                     // Call backend to end session (best-effort; show status)
                     if (sessId != null) {
                       try {
-                        final resp = await _api.endSession(sessId);
+                        await _api.endSession(sessId);
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session ended on server')));
                       } catch (e) {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to end session on server: $e')));

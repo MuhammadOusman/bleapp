@@ -135,29 +135,55 @@ class _CourseSessionsScreenState extends State<CourseSessionsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final teacher = widget.course['teacher_profile'] as Map<String, dynamic>?;
+    final totalSessions = widget.course['total_sessions'] ?? 0;
+    final totalAttendance = widget.course['total_attendance'] ?? 0;
+
     return Scaffold(
       appBar: AppBar(title: Text(widget.course['course_name'] ?? 'Course')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : _sessions.isEmpty
-              ? const Center(child: Text('No sessions yet'))
-              : ListView.builder(
-                  itemCount: _sessions.length,
-                  itemBuilder: (_, i) {
-                    final s = _sessions[i] as Map;
-                    final cnt = s['attendance_count'] ?? 0;
-                    return ListTile(
-                      title: Text('Session ${s['session_number'] ?? ''} • ${s['is_active'] == false ? 'Ended' : 'Active'}'),
-                      subtitle: Text('$cnt attendees'),
-                      trailing: ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => SessionDetailScreen(session: s)));
-                        },
-                        child: const Text('Open'),
-                      ),
-                    );
-                  },
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(widget.course['course_code'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        Text('Teacher: ${teacher != null ? (teacher['full_name'] ?? teacher['email']) : 'Unknown'}'),
+                      ]),
+                      Column(children: [Text('Sessions', style: TextStyle(fontWeight: FontWeight.bold)), Text('$totalSessions')]),
+                      Column(children: [Text('Attendance', style: TextStyle(fontWeight: FontWeight.bold)), Text('$totalAttendance')]),
+                    ],
+                  ),
                 ),
+                const Divider(),
+                Expanded(
+                  child: _sessions.isEmpty
+                      ? const Center(child: Text('No sessions yet'))
+                      : ListView.builder(
+                          itemCount: _sessions.length,
+                          itemBuilder: (_, i) {
+                            final s = _sessions[i] as Map;
+                            final cnt = s['attendance_count'] ?? 0;
+                            return ListTile(
+                              title: Text('Session ${s['session_number'] ?? ''} • ${s['is_active'] == false ? 'Ended' : 'Active'}'),
+                              subtitle: Text('$cnt attendees'),
+                              trailing: ElevatedButton(
+                                onPressed: () {
+                                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => SessionDetailScreen(session: s)));
+                                },
+                                child: const Text('Open'),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
     );
   }
 }

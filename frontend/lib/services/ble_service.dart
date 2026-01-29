@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:beacon_broadcast/beacon_broadcast.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 
 class BleService {
   final BeaconBroadcast _beacon = BeaconBroadcast();
@@ -15,17 +14,17 @@ class BleService {
   Future<bool> startBeacon(String sessionId) async {
     // Teacher beacon: uuid = sessionId, major = kAppMajorId, minor = kTeacherMinorId
     try {
-      print('[Beacon] starting teacher beacon uuid=$sessionId major=$kAppMajorId minor=$kTeacherMinorId');
+      debugPrint('[Beacon] starting teacher beacon uuid=$sessionId major=$kAppMajorId minor=$kTeacherMinorId');
       await _beacon
           .setUUID(sessionId)
           .setMajorId(kAppMajorId)
           .setMinorId(kTeacherMinorId)
           .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
           .start();
-      print('[Beacon] started');
+      debugPrint('[Beacon] started');
       return true;
     } catch (e) {
-      print('[Beacon] start failed: $e');
+      debugPrint('[Beacon] start failed: $e');
       return false;
     }
   }
@@ -33,9 +32,9 @@ class BleService {
   Future<void> stopBeacon() async {
     try {
       await _beacon.stop();
-      print('[Beacon] stopped');
+      debugPrint('[Beacon] stopped');
     } catch (e) {
-      print('[Beacon] stop failed: $e');
+      debugPrint('[Beacon] stop failed: $e');
     }
   }
 
@@ -43,17 +42,17 @@ class BleService {
   Future<bool> startPeerBeacon(String deviceSignature) async {
     // Student beacon: uuid = deviceSignature, major = kAppMajorId, minor = kStudentMinorId
     try {
-      print('[PeerBeacon] start student uuid=$deviceSignature major=$kAppMajorId minor=$kStudentMinorId');
+      debugPrint('[PeerBeacon] start student uuid=$deviceSignature major=$kAppMajorId minor=$kStudentMinorId');
       await _beacon
           .setUUID(deviceSignature)
           .setMajorId(kAppMajorId)
           .setMinorId(kStudentMinorId)
           .setLayout('m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24')
           .start();
-      print('[PeerBeacon] started');
+      debugPrint('[PeerBeacon] started');
       return true;
     } catch (e) {
-      print('[PeerBeacon] start failed: $e');
+      debugPrint('[PeerBeacon] start failed: $e');
       return false;
     }
   }
@@ -61,9 +60,9 @@ class BleService {
   Future<void> stopPeerBeacon() async {
     try {
       await _beacon.stop();
-      print('[PeerBeacon] stopped');
+      debugPrint('[PeerBeacon] stopped');
     } catch (e) {
-      print('[PeerBeacon] stop failed: $e');
+      debugPrint('[PeerBeacon] stop failed: $e');
     }
   }
 
@@ -104,7 +103,7 @@ class BleService {
 
   void startScan(void Function(String uuid, int minor) onFound) {
     // Start platform scan and listen to aggregated scan results
-    print('[Scan] startScan requested');
+    debugPrint('[Scan] startScan requested');
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 20));
 
     _scanResultsSub = FlutterBluePlus.scanResults.listen((results) {
@@ -120,13 +119,13 @@ class BleService {
               final parsed = _parseIBeacon(bytes);
 
               if (parsed != null && parsed['major'] == kAppMajorId) {
-                print('[Scan] MATCH! uuid=${parsed['uuid']} minor=${parsed['minor']} rssi=${r.rssi}');
+                debugPrint('[Scan] MATCH! uuid=${parsed['uuid']} minor=${parsed['minor']} rssi=${r.rssi}');
                 onFound(parsed['uuid'], parsed['minor']);
               }
             }
           }
         } catch (e) {
-          print('[Scan] parse error: $e');
+          debugPrint('[Scan] parse error: $e');
         }
       }
     });

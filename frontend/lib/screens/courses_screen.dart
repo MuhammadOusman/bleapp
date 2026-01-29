@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import 'teacher_session_screen_v2.dart';
-import 'student_scan_screen.dart';
 import 'student_session_scanner.dart';
 import 'teacher_dashboard.dart';
 
@@ -76,11 +76,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
           for (var r in results) counts[r['id'] as String] = r['count'] as int;
           if (mounted) setState(() => _sessionCounts = counts);
         } catch (e) {
-          print('[Courses] failed to fetch session counts: $e');
+          debugPrint('[Courses] failed to fetch session counts: $e');
         }
       } catch (e) {
         // Log and show user-friendly message
-        print('[Courses] getCourses error: $e');
+        debugPrint('[Courses] getCourses error: $e');
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to load courses (see logs)')));
       }
@@ -92,7 +92,8 @@ class _CoursesScreenState extends State<CoursesScreen> {
     if (_role == 'teacher') {
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => TeacherSessionScreenV2(course: course)));
     } else {
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => StudentScanScreen(course: course)));
+      // Students should use the scanner entrypoint instead of opening a course
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StudentSessionScanner()));
     }
   }
 

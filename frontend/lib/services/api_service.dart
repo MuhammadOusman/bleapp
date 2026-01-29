@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/foundation.dart';
 
 final backendBase = dotenv.env['BACKEND_BASE'] ?? 'https://dsu-ble-attendance.vercel.app/api';
 
@@ -19,7 +20,7 @@ class ApiService {
   void _log(String msg) {
     try {
       // Keep logs helpful but concise
-      print('[API] $msg');
+      debugPrint('[API] $msg');
     } catch (_) {}
   }
 
@@ -33,7 +34,7 @@ class ApiService {
     });
     _log('POST $url body=${body.length} bytes');
     final res = await http.post(url, headers: {'Content-Type': 'application/json'}, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     return _handle(res);
   }
 
@@ -42,12 +43,12 @@ class ApiService {
     final body = jsonEncode({'email': email, 'password': password, 'device_signature': deviceSignature});
     _log('POST $url body=${body.length} bytes');
     final res = await http.post(url, headers: {'Content-Type': 'application/json'}, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     if (data.containsKey('token')) {
       await storage.write(key: 'token', value: data['token']);
       if (data.containsKey('profile')) {
-        await storage.write(key: 'role', value: data['profile']['role']?.toString() ?? 'student');
+        await storage.write(key: 'role', value: (data['profile']['role']?.toString() ?? 'student'));
       }
     }
     return data;
@@ -57,7 +58,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/courses');
     _log('GET $url');
     final res = await http.get(url, headers: {'Authorization': 'Bearer $token'});
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes body=${res.body}');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes body=${res.body}');
     final data = _handle(res);
     return (data ?? []) as List<dynamic>;
   }
@@ -79,7 +80,7 @@ class ApiService {
     final body = jsonEncode({'course_id': courseId, 'session_number': sessionNumber});
     _log('POST $url body=${body.length} bytes');
     final res = await http.post(url, headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return data['session_id'] as String;
   }
@@ -91,7 +92,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/sessions/$sessionId/end');
     _log('POST $url');
     final res = await http.post(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     return _handle(res) as Map<String, dynamic>;
   }
 
@@ -104,7 +105,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/courses/$courseId/students');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data['students'] as List<dynamic>?) ?? [];
   }
@@ -117,7 +118,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/sessions/$sessionId');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data as Map<String, dynamic>);
   }
@@ -130,7 +131,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/courses/$courseId/sessions');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data['sessions'] as List<dynamic>?) ?? [];
   }
@@ -143,7 +144,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/courses/$courseId/details');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data as Map<String, dynamic>);
   }
@@ -156,7 +157,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/profiles/me');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data as Map<String, dynamic>);
   }
@@ -169,7 +170,7 @@ class ApiService {
     final url = Uri.parse('$backendBase/sessions/$sessionId/attendance');
     _log('GET $url');
     final res = await http.get(url, headers: headers);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     final data = _handle(res);
     return (data['attendees'] as List<dynamic>?) ?? [];
   }
@@ -184,7 +185,7 @@ class ApiService {
     final body = jsonEncode({'session_id': sessionId, 'student_id': studentId});
     _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
     final res = await http.post(url, headers: headers, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     return _handle(res);
   }
 
@@ -197,7 +198,7 @@ class ApiService {
     final body = jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature});
     _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
     final res = await http.post(url, headers: headers, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     return _handle(res);
   }
 
@@ -211,7 +212,7 @@ class ApiService {
     final body = jsonEncode({'session_id': sessionId, 'device_signature': deviceSignature});
     _log('POST $url headers=${headers.keys.toList()} body=${body.length} bytes');
     final res = await http.post(url, headers: headers, body: body);
-    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    _log('RESPONSE ${res.statusCode} ${res.body.length} bytes');
     return _handle(res);
   }
 

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/ble_service.dart';
-import '../services/api_service.dart';
 import 'student_scan_screen.dart';
 
 class StudentSessionScanner extends StatefulWidget {
@@ -13,7 +12,6 @@ class StudentSessionScanner extends StatefulWidget {
 
 class _StudentSessionScannerState extends State<StudentSessionScanner> {
   final _ble = BleService();
-  final _api = ApiService();
   bool _scanning = false;
   bool _opened = false;
   final Map<String, Map<String, dynamic>> _found = {}; // sessionId -> data
