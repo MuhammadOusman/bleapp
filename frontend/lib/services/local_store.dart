@@ -31,4 +31,30 @@ class LocalStore {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_pendingKey);
   }
+
+  // Attendance snapshots (for review & offline sync)
+  static const _snapshotsKey = 'attendance_snapshots';
+
+  static Future<List<Map<String, dynamic>>> loadAttendanceSnapshots() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_snapshotsKey);
+    if (raw == null) return [];
+    final arr = jsonDecode(raw) as List;
+    return arr.map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<void> saveAttendanceSnapshots(List<Map<String, dynamic>> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_snapshotsKey, jsonEncode(items));
+  }
+
+  static Future<void> addAttendanceSnapshot(Map<String, dynamic> item) async {
+    final list = await loadAttendanceSnapshots();
+    list.add(item);
+    await saveAttendanceSnapshots(list);
+  }
+
+  static Future<void> updateAttendanceSnapshots(List<Map<String, dynamic>> items) async {
+    await saveAttendanceSnapshots(items);
+  }
 }

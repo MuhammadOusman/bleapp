@@ -157,7 +157,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
                             final c = filtered[i];
                             return ListTile(
                               title: Text(c['course_name'] ?? c['name'] ?? 'Course'),
-                              subtitle: Text('${c['course_code'] ?? ''} • ${_sessionCounts[c['id']] ?? 0}/16'),
+                              subtitle: Builder(builder: (_) {
+                                final raw = _sessionCounts[c['id']] ?? 0;
+                                final display = raw == 0 ? 0 : (raw % 16 == 0 ? 16 : raw % 16);
+                                return Text('${c['course_code'] ?? ''} • ${display}/16');
+                              }),
                               onTap: () => _onCourseTap(c),
                             );
                           },

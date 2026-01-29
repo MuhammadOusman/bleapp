@@ -7,6 +7,7 @@ import '../services/ble_service.dart';
 import '../services/permission_service.dart';
 import '../services/local_store.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'attendance_review_screen.dart';
 
 class TeacherSessionScreenV2 extends StatefulWidget {
   final Map course;
@@ -22,8 +23,6 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   final _storage = const FlutterSecureStorage();
 
   String? _sessionId;
-  int _remaining = 0;
-  Timer? _timer;
 
   int _sessionsCount = 0;
   static const int kMaxSessions = 16;
@@ -33,6 +32,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   final TextEditingController _searchController = TextEditingController();
 
   bool _scanning = false;
+
+  // Elapsed seconds counter for open attendance
+  int _elapsedSeconds = 0;
+  Timer? _elapsedTimer;
   // _students: list of enrolled students (populated when session starts)
   List<Map<String, dynamic>> _students = []; // { student_id, name, present, discovered_at, synced }
 
@@ -49,6 +52,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   void initState() {
     super.initState();
     _loadPending();
+    // Ensure session count is loaded immediately when opening this screen
+    _loadSessionCount();
+
     _connSub = Connectivity().onConnectivityChanged.listen((dynamic result) {
       // On some platforms the stream emits a List<ConnectivityResult>, on others a single ConnectivityResult
       if (result is List) {
@@ -62,7 +68,6 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
   @override
   void dispose() {
-    _timer?.cancel();
     _ble.stopBeacon();
     _ble.stopScan();
     _connSub?.cancel();
@@ -92,7 +97,6 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     final sid = await _api.startSession(token, widget.course['id'], 1);
     setState(() {
       _sessionId = sid;
-      _remaining = 15;
     });
     // Refresh the session count since a session was just started
     _loadSessionCount();
@@ -157,21 +161,17 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
 
     await _ble.startBeacon(sid);
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+
+    // Start elapsed seconds timer (counts up until End Attendance)
+    _elapsedSeconds = 0;
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return;
-      setState(() {
-        _remaining -= 1;
-        if (_remaining <= 0) {
-          _ble.stopBeacon();
-          // Stop polling when session ends
-          try {
-            _realtimeTimer?.cancel();
-            _realtimeTimer = null;
-          } catch (_) {}
-          t.cancel();
-        }
-      });
+      setState(() => _elapsedSeconds += 1);
     });
+
+    // Ensure we are scanning continuously for students while session is active
+    if (!_scanning) await _startScanForStudents();
   }
 
   Future<void> _startScanForStudents() async {
@@ -258,10 +258,15 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth must be turned on to scan.')));
     }
 
-    Timer(const Duration(seconds: 20), () async {
+    // Keep scanning until explicitly stopped by End Attendance
+    setState(() { _scanning = true; });
+  }
+
+  Future<void> _stopScanForStudents() async {
+    try {
       _ble.stopScan();
-      setState(() { _scanning = false; });
-    });
+    } catch (_) {}
+    setState(() { _scanning = false; });
   }
 
   Future<void> _loadPending() async {
@@ -316,6 +321,14 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
   }
 
+  // Convert raw session rows into a user-friendly count within 0..kMaxSessions
+  int _sessionsDisplayCount() {
+    final raw = _sessionsCount;
+    if (raw == 0) return 0;
+    final rem = raw % kMaxSessions;
+    return rem == 0 ? kMaxSessions : rem;
+  }
+
   Future<void> _toggleApprove(int idx) async {
     setState(() => _detected[idx]['approved'] = !_detected[idx]['approved']);
     await LocalStore.updatePending(_detected);
@@ -368,11 +381,36 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
   Future<void> _autoSync() async {
     if (_syncing) return;
+    // 1) Sync legacy pending approved devices
     final pending = await LocalStore.loadPending();
     final need = pending.where((d) => d['approved'] == true && d['synced'] != true).toList();
-    if (need.isEmpty) return;
+    if (need.isNotEmpty) {
+      _syncing = true;
+      await _syncApproved();
+      _syncing = false;
+    }
+
+    // 2) Sync attendance snapshots
+    final snapshots = await LocalStore.loadAttendanceSnapshots();
+    final needSnap = snapshots.where((s) => s['synced'] != true).toList();
+    if (needSnap.isEmpty) return;
     _syncing = true;
-    await _syncApproved();
+    for (var snap in needSnap) {
+      try {
+        final sessionId = snap['session_id'];
+        final students = (snap['students'] as List<dynamic>?) ?? [];
+        for (var st in students) {
+          if (st['present'] == true) {
+            await _api.approveStudentById(sessionId, st['student_id']);
+          }
+        }
+        // mark snapshot as synced
+        snap['synced'] = true;
+      } catch (e) {
+        print('[AutoSync] failed snapshot sync: $e');
+      }
+    }
+    await LocalStore.updateAttendanceSnapshots(snapshots);
     _syncing = false;
   }
 
@@ -440,28 +478,21 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
   @override
   Widget build(BuildContext context) {
-    final courseTitle = widget.course['course_name'] ?? widget.course['name'] ?? '';
+    final courseTitle = '${widget.course['course_name'] ?? widget.course['name'] ?? ''}${widget.course['course_code'] != null ? ' (${widget.course['course_code']})' : ''}';
     return Scaffold(
       appBar: AppBar(title: Text(courseTitle)),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            if (_sessionId != null) ...[
-              Text('Sessions: $_sessionsCount/$kMaxSessions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Text('Remaining: $_remaining s', style: const TextStyle(fontSize: 20)),
-            ],
+            // Show sessions count (normalized) even before starting attendance
+            Text('Sessions: ${_sessionsDisplayCount()}/$kMaxSessions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
             const SizedBox(height: 12),
-            Row(children: [
-              ElevatedButton(onPressed: _startSession, child: const Text('Start 15s Attendance')),
-              const SizedBox(width: 12),
-              ElevatedButton(onPressed: _scanning ? null : _startScanForStudents, child: Text(_scanning ? 'Scanning...' : 'Scan for Students')),
-              const SizedBox(width: 12),
-              ElevatedButton(onPressed: _sessionId == null ? null : _refreshAttendance, child: const Text('Refresh Attendance Now')),
-              const SizedBox(width: 12),
-              ElevatedButton(onPressed: _checkAdvertise, child: const Text('Check Advertising')),
-            ]),
+            // Note: Start/End buttons are in bottomNavigationBar
+            const SizedBox(height: 8),
+            Text('Seconds: $_elapsedSeconds s', style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 8),
             const SizedBox(height: 12),
             Expanded(
               child: SingleChildScrollView(
@@ -471,10 +502,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                     ..._detected.map((d) => ListTile(
                           title: Text(d['name'] ?? d['device_signature']),
                           subtitle: Text('${d['discovered_at']} - ${d['synced'] ? 'Synced' : d['approved'] ? 'Approved' : 'Pending'}'),
-                          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                            IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
-                            IconButton(icon: Icon(Icons.sync), onPressed: _syncApproved),
-                          ]),
+                          trailing: IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
                         )).toList(),
                     const Divider(),
                     const SizedBox(height: 8),
@@ -514,19 +542,54 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                           leading: Checkbox(value: s['present'] == true, onChanged: (_) {
                             setState(() => s['present'] = !(s['present'] == true));
                           }),
-                          trailing: IconButton(icon: Icon(s['synced'] == true ? Icons.check : Icons.sync), onPressed: _syncPresent),
                         )).toList(),
                   ],
                 ),
               ),
             ),
 
-            Row(children: [
-              ElevatedButton(onPressed: _syncPresent, child: const Text('Sync Present')),
-              const SizedBox(width: 12),
-              ElevatedButton(onPressed: _syncAll, child: const Text('Retry All')),
-            ]),
+            const SizedBox(height: 36), // space so bottom buttons don't overlap
+
           ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _sessionId == null ? _startSession : null,
+                  child: const Text('Start Attendance'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _sessionId != null ? () async {
+                    // End attendance: stop beacon and scanning and open review page
+                    try { await _ble.stopBeacon(); } catch (_) {}
+                    await _stopScanForStudents();
+                    _elapsedTimer?.cancel();
+                    final sessId = _sessionId;
+                    setState(() { _sessionId = null; /* preserve students for review navigation */ });
+                    if (sessId != null) {
+                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => AttendanceReviewScreen(
+                        course: widget.course,
+                        sessionId: sessId,
+                        sessionNumber: _sessionsDisplayCount(),
+                        students: _students,
+                      )));
+                      // Reset elapsed and students only after returning from review if needed
+                      _elapsedSeconds = 0;
+                    }
+                  } : null,
+                  child: const Text('End Attendance'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
