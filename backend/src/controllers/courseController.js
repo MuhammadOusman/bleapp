@@ -43,3 +43,23 @@ exports.getSessionCount = async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };
+
+// Get sessions for a course (used by teacher dashboard)
+exports.getCourseSessions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data: sessions, error: sessionsErr } = await supabase.from('sessions').select('*').eq('course_id', id).order('created_at', { ascending: false });
+        if (sessionsErr) return res.status(400).json({ error: sessionsErr.message });
+
+        // For each session, fetch attendance count (simple implementation)
+        const sessionsWithCounts = await Promise.all((sessions || []).map(async s => {
+            const { count } = await supabase.from('attendance').select('*', { count: 'exact', head: true }).eq('session_id', s.id);
+            return { ...s, attendance_count: count || 0 };
+        }));
+
+        res.json({ sessions: sessionsWithCounts });
+    } catch (err) {
+        console.error('getCourseSessions error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

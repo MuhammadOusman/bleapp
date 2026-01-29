@@ -164,3 +164,37 @@ exports.endSession = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Get session by id with course info
+exports.getSessionById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data: session, error: sessionErr } = await supabase.from('sessions').select('*').eq('id', id).single();
+        if (sessionErr || !session) return res.status(404).json({ error: 'Session not found' });
+
+        const { data: course, error: courseErr } = await supabase.from('courses').select('id,course_name,course_code').eq('id', session.course_id).limit(1).single();
+
+        if (courseErr) return res.status(400).json({ error: courseErr.message });
+
+        res.json({ session, course });
+    } catch (err) {
+        console.error('getSessionById error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// Get attendance rows for a session with student profile info
+exports.getSessionAttendance = async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Try to get attendance with joined profiles if supported
+        const { data: rows, error } = await supabase.from('attendance').select('student_id,marked_at, profiles(id,full_name,email)').eq('session_id', id);
+        if (error) return res.status(400).json({ error: error.message });
+        // Normalize rows
+        const result = (rows || []).map(r => ({ student_id: r.student_id, marked_at: r.marked_at, profile: r.profiles || null }));
+        res.json({ attendees: result });
+    } catch (err) {
+        console.error('getSessionAttendance error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

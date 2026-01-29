@@ -3,6 +3,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/api_service.dart';
 import 'teacher_session_screen_v2.dart';
 import 'student_scan_screen.dart';
+import 'student_session_scanner.dart';
+import 'teacher_dashboard.dart';
 
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
@@ -22,6 +24,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
   // Search state for courses list
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
+
+  // Student scanner entry
+  void _openStudentScanner() {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StudentSessionScanner()));
+  }
 
   @override
   void initState() {
@@ -86,6 +93,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       appBar: AppBar(
         title: const Text('Courses'),
         actions: [
+          if (_role == 'teacher') IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen())), icon: const Icon(Icons.dashboard), tooltip: 'Dashboard'),
           IconButton(
             icon: const Icon(Icons.bug_report),
             tooltip: 'Show debug info',
@@ -105,71 +113,84 @@ class _CoursesScreenState extends State<CoursesScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : (_courses.isEmpty
+          : (_role == 'student'
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('No courses found for this account.', textAlign: TextAlign.center),
+                      const Text('Scan for Sessions', style: TextStyle(fontSize: 18)),
                       const SizedBox(height: 12),
-                      ElevatedButton(onPressed: _load, child: const Text('Retry')),
+                      ElevatedButton(onPressed: _openStudentScanner, child: const Text('Scan for Sessions')),
                       const SizedBox(height: 8),
-                      const Text('If you should see courses, ensure your teacher record is set in the backend.'),
+                      TextButton(onPressed: _load, child: const Text('Reload')),
                     ],
                   ),
                 )
-              : Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search courses by name or code',
-                          suffixIcon: _searchQuery.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() => _searchQuery = '');
-                                  },
-                                )
-                              : null,
-                        ),
-                        onChanged: (v) => setState(() => _searchQuery = v.trim()),
+              : (_courses.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('No courses found for this account.', textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          ElevatedButton(onPressed: _load, child: const Text('Retry')),
+                          const SizedBox(height: 8),
+                          const Text('If you should see courses, ensure your teacher record is set in the backend.'),
+                        ],
                       ),
-                    ),
-                    Expanded(
-                      child: Builder(builder: (_) {
-                        final q = _searchQuery.toLowerCase();
-                        final filtered = _courses.where((c) {
-                          if (q.isEmpty) return true;
-                          final name = (c['course_name'] ?? c['name'] ?? '').toString().toLowerCase();
-                          final code = (c['course_code'] ?? '').toString().toLowerCase();
-                          return name.contains(q) || code.contains(q);
-                        }).toList();
-                        if (filtered.isEmpty) {
-                          return Center(child: Text('No courses match "$_searchQuery"'));
-                        }
-                        return ListView.builder(
-                          itemCount: filtered.length,
-                          itemBuilder: (_, i) {
-                            final c = filtered[i];
-                            return ListTile(
-                              title: Text(c['course_name'] ?? c['name'] ?? 'Course'),
-                              subtitle: Builder(builder: (_) {
-                                final raw = _sessionCounts[c['id']] ?? 0;
-                                final display = raw == 0 ? 0 : (raw % 16 == 0 ? 16 : raw % 16);
-                                return Text('${c['course_code'] ?? ''} • ${display}/16');
-                              }),
-                              onTap: () => _onCourseTap(c),
+                    )
+                  : Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: TextField(
+                            controller: _searchController,
+                            decoration: InputDecoration(
+                              hintText: 'Search courses by name or code',
+                              suffixIcon: _searchQuery.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() => _searchQuery = '');
+                                      },
+                                    )
+                                  : null,
+                            ),
+                            onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                          ),
+                        ),
+                        Expanded(
+                          child: Builder(builder: (_) {
+                            final q = _searchQuery.toLowerCase();
+                            final filtered = _courses.where((c) {
+                              if (q.isEmpty) return true;
+                              final name = (c['course_name'] ?? c['name'] ?? '').toString().toLowerCase();
+                              final code = (c['course_code'] ?? '').toString().toLowerCase();
+                              return name.contains(q) || code.contains(q);
+                            }).toList();
+                            if (filtered.isEmpty) {
+                              return Center(child: Text('No courses match "$_searchQuery"'));
+                            }
+                            return ListView.builder(
+                              itemCount: filtered.length,
+                              itemBuilder: (_, i) {
+                                final c = filtered[i];
+                                return ListTile(
+                                  title: Text(c['course_name'] ?? c['name'] ?? 'Course'),
+                                  subtitle: Builder(builder: (_) {
+                                    final raw = _sessionCounts[c['id']] ?? 0;
+                                    final display = raw == 0 ? 0 : (raw % 16 == 0 ? 16 : raw % 16);
+                                    return Text('${c['course_code'] ?? ''} • ${display}/16');
+                                  }),
+                                  onTap: () => _onCourseTap(c),
+                                );
+                              },
                             );
-                          },
-                        );
-                      }),
-                    ),
-                  ],
-                )),
+                          }),
+                        ),
+                      ],
+                    ))),
 
     );
   }

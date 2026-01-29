@@ -15,6 +15,8 @@ router.post('/login', authController.login);
 router.get('/courses', authMiddleware, courseController.getCourses);
 router.post('/sessions/start', authMiddleware, attendanceController.startSession);
 router.post('/sessions/:id/end', authMiddleware, attendanceController.endSession);
+router.get('/sessions/:id', authMiddleware, attendanceController.getSessionById);
+router.get('/sessions/:id/attendance', authMiddleware, attendanceController.getSessionAttendance);
 router.post('/attendance/mark', authMiddleware, attendanceController.markAttendance);
 // Teacher approval endpoint (approves by device_signature)
 router.post('/attendance/approve', authMiddleware, attendanceController.approveByTeacher);
@@ -37,6 +39,8 @@ router.get('/admin/courses', authMiddleware, adminMiddleware, courseAdminControl
 router.get('/courses/:id/students', authMiddleware, require('../controllers/courseController').getCourseStudents);
 // Get number of sessions started for a course
 router.get('/courses/:id/sessions_count', authMiddleware, require('../controllers/courseController').getSessionCount);
+// Get sessions for a course (for teacher dashboard)
+router.get('/courses/:id/sessions', authMiddleware, require('../controllers/courseController').getCourseSessions);
 
 // Admin routes - require admin role where specified
 const enrollmentController = require('../controllers/enrollmentController');

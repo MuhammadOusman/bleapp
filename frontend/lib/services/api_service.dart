@@ -109,6 +109,45 @@ class ApiService {
     return (data['students'] as List<dynamic>?) ?? [];
   }
 
+  /// Get a session by id with course info
+  Future<Map<String, dynamic>> getSession(String sessionId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/sessions/$sessionId');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data as Map<String, dynamic>);
+  }
+
+  /// Get sessions for a course (teacher dashboard)
+  Future<List<dynamic>> getCourseSessions(String courseId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/courses/$courseId/sessions');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data['sessions'] as List<dynamic>?) ?? [];
+  }
+
+  /// Get attendance rows for a session
+  Future<List<dynamic>> getSessionAttendance(String sessionId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/sessions/$sessionId/attendance');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data['attendees'] as List<dynamic>?) ?? [];
+  }
+
   /// Teacher: approve attendance for a student by id (manual or sync)
   Future<Map<String, dynamic>> approveStudentById(String sessionId, String studentId) async {
     final token = await storage.read(key: 'token');
