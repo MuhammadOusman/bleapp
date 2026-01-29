@@ -121,9 +121,29 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
 
     // Poll attendance table every 2s for this session (simple realtime fallback)
+    // Some DBs may not have `device_signature` column. Track support and fall back.
+    bool attendanceHasDeviceSignature = true;
     _realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
       try {
-        final resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at,device_signature').eq('session_id', sid);
+        dynamic resp;
+        if (attendanceHasDeviceSignature) {
+          try {
+            resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at,device_signature').eq('session_id', sid);
+          } catch (e) {
+            final msg = e.toString();
+            // If the error indicates missing column, flip the flag and retry without
+            if (msg.contains('device_signature') || msg.contains('column "device_signature"')) {
+              attendanceHasDeviceSignature = false;
+              debugPrint('[Poll] device_signature column missing, switching fallback query');
+              resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at').eq('session_id', sid);
+            } else {
+              rethrow;
+            }
+          }
+        } else {
+          resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at').eq('session_id', sid);
+        }
+
         // Debugging: log raw response and type
         try {
           debugPrint('[Poll] rawResp type=${resp.runtimeType} value=$resp');
@@ -143,7 +163,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
               _detected.add({
                 'session_id': sid,
                 'student_id': studentId,
-                'device_signature': r['device_signature'] ?? 'unknown',
+                'device_signature': attendanceHasDeviceSignature ? (r['device_signature'] ?? 'unknown') : 'unknown',
                 'discovered_at': r['marked_at'] ?? DateTime.now().toIso8601String(),
                 'approved': true,
                 'synced': true,
@@ -208,7 +228,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
             // If the profile matches an enrolled student, mark them present
             final idx = _students.indexWhere((s) => s['student_id'] == profile['id']);
             if (idx >= 0) {
-              if (!_students[idx]['present']) {
+              if (_students[idx]['present'] != true) {
                 _students[idx]['present'] = true;
                 _students[idx]['discovered_at'] = now;
                 _students[idx]['synced'] = false;
@@ -409,8 +429,8 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                     // Unknown detected devices
                     ..._detected.map((d) => ListTile(
                           title: Text(d['name'] ?? d['device_signature']),
-                          subtitle: Text('${d['discovered_at']} - ${d['synced'] ? 'Synced' : d['approved'] ? 'Approved' : 'Pending'}'),
-                          trailing: IconButton(icon: Icon(d['approved'] ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
+                          subtitle: Text('${d['discovered_at']} - ${d['synced'] == true ? 'Synced' : d['approved'] == true ? 'Approved' : 'Pending'}'),
+                          trailing: IconButton(icon: Icon(d['approved'] == true ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
                         )).toList(),
                     const Divider(),
                     const SizedBox(height: 8),

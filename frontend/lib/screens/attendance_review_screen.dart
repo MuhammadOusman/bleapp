@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/local_store.dart';
 import '../services/api_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'teacher_dashboard.dart';
 
 class AttendanceReviewScreen extends StatefulWidget {
   final Map course;
@@ -43,39 +44,71 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       'synced': false,
     };
 
-    await LocalStore.addAttendanceSnapshot(snapshot);
-
-    // Try to sync right away if online
+    // Check connectivity first
     final conn = await Connectivity().checkConnectivity();
-    if (conn != ConnectivityResult.none) {
-      try {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
-        for (var s in snapshot['students']) {
-          if (s['present'] == true) {
-            await _api.approveStudentById(snapshot['session_id'], s['student_id']);
-          }
-        }
-        snapshot['synced'] = true;
-        final snaps = await LocalStore.loadAttendanceSnapshots();
-        // replace the snapshot we just added (mark synced)
-        final idx = snaps.indexWhere((sn) => sn['created_at'] == snapshot['created_at'] && sn['session_id'] == snapshot['session_id']);
-        if (idx >= 0) {
-          snaps[idx] = snapshot;
-          await LocalStore.updateAttendanceSnapshots(snaps);
-        }
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance saved and synced')));
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved locally; sync failed: $e')));
-      }
-    } else {
+    if (conn == ConnectivityResult.none) {
+      // Offline: save locally only
+      await LocalStore.addAttendanceSnapshot(snapshot);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: sync not available, connect to sync.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: saved locally. Will sync when online.')));
+      setState(() => _saving = false);
+      // After saving, return to Dashboard for teacher flows
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
+      return;
     }
 
-    setState(() => _saving = false);
-    Navigator.of(context).pop();
+    // Online: Try to upload directly. On failure, offer to Save Locally or Discard.
+    try {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+      for (var s in snapshot['students']) {
+        if (s['present'] == true) {
+          await _api.approveStudentById(snapshot['session_id'], s['student_id']);
+        }
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance saved and synced')));
+      setState(() => _saving = false);
+      // After successful save, navigate back to the teacher dashboard
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
+      return;
+    } catch (e) {
+      // Upload failed. Ask the user whether to save locally or discard.
+      if (!mounted) return;
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Sync failed'),
+          content: Text('Could not upload attendance: $e. Save locally and retry later, or discard?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop('discard'), child: const Text('Discard')),
+            TextButton(onPressed: () => Navigator.of(context).pop('save'), child: const Text('Save Locally')),
+            ElevatedButton(onPressed: () => Navigator.of(context).pop('retry'), child: const Text('Retry')),
+          ],
+        ),
+      );
+
+      if (choice == 'save') {
+        await LocalStore.addAttendanceSnapshot(snapshot);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved locally; will retry when online.')));
+        setState(() => _saving = false);
+        // After saving locally, return to Dashboard for teacher flows
+        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
+        return;
+      } else if (choice == 'retry') {
+        // try again recursively (but avoid infinite loops)
+        setState(() => _saving = false);
+        await _saveAttendance();
+        return;
+      } else {
+        // discard
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance discarded')));
+        setState(() => _saving = false);
+        Navigator.of(context).pop();
+        return;
+      }
+    }
   }
 
   @override
@@ -100,9 +133,22 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
             )),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: ElevatedButton(
-                onPressed: _saving ? null : _saveAttendance,
-                child: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save Attendance'),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _saving ? null : () { Navigator.of(context).pop(); },
+                      child: const Text('Discard'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _saving ? null : _saveAttendance,
+                      child: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save Attendance'),
+                    ),
+                  ),
+                ],
               ),
             )
           ],

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
+import '../services/sync_service.dart';
 import 'teacher_session_screen_v2.dart';
 import 'student_session_scanner.dart';
 import 'teacher_dashboard.dart';
@@ -21,6 +22,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   String _profileName = 'Student';
   bool _loading = true;
   Map<String, int> _sessionCounts = {}; // course_id -> count
+  Map<String, Map<String, dynamic>> _courseDetails = {}; // course_id -> details (teacher, totals)
 
   // Search state for courses list
   String _searchQuery = '';
@@ -53,6 +55,16 @@ class _CoursesScreenState extends State<CoursesScreen> {
     if (token != null) {
       // Set role immediately so teacher view appears even if network call fails
       setState(() => _role = role);
+
+      // Run background auto-sync now (do not await blocking the UI)
+      // This ensures pending snapshots & devices are processed once on app open.
+      // We run silently and log results.
+      try {
+        SyncService.runAutoSync();
+      } catch (e) {
+        debugPrint('[Courses] runAutoSync scheduling failed: $e');
+      }
+
       try {
         final courses = await _api.getCourses(token);
         // Get profile (to show student's name when role=student)
@@ -67,18 +79,27 @@ class _CoursesScreenState extends State<CoursesScreen> {
           _courses = courses;
         });
 
-        // Load session counts for the courses (parallel)
+        // Load course details (teacher, totals) and session counts in parallel
         try {
           final futures = courses.map((c) async {
-            final cnt = await _api.getSessionCount(c['id']);
-            return {'id': c['id'], 'count': cnt};
+            final details = await _api.getCourseDetails(c['id']);
+            final count = details['total_sessions'] as int? ?? 0;
+            return {'id': c['id'], 'details': details, 'count': count};
           }).toList();
           final results = await Future.wait(futures);
+
           final counts = <String, int>{};
-          for (var r in results) counts[r['id'] as String] = r['count'] as int;
-          if (mounted) setState(() => _sessionCounts = counts);
+          final detailsMap = <String, Map<String, dynamic>>{};
+          for (var r in results) {
+            counts[r['id'] as String] = r['count'] as int;
+            detailsMap[r['id'] as String] = r['details'] as Map<String, dynamic>;
+          }
+          if (mounted) setState(() {
+            _sessionCounts = counts;
+            _courseDetails = detailsMap;
+          });
         } catch (e) {
-          debugPrint('[Courses] failed to fetch session counts: $e');
+          debugPrint('[Courses] failed to fetch course details/counts: $e');
         }
       } catch (e) {
         // Log and show user-friendly message with details for debugging
@@ -189,13 +210,18 @@ class _CoursesScreenState extends State<CoursesScreen> {
                               itemCount: filtered.length,
                               itemBuilder: (_, i) {
                                 final c = filtered[i];
+                                final details = _courseDetails[c['id']] ?? {};
+                                final teacher = details['teacher'] as Map<String, dynamic>?;
+                                final raw = _sessionCounts[c['id']] ?? 0;
                                 return ListTile(
                                   title: Text(c['course_name'] ?? c['name'] ?? 'Course'),
-                                  subtitle: Builder(builder: (_) {
-                                    final raw = _sessionCounts[c['id']] ?? 0;
-                                    final display = raw == 0 ? 0 : (raw % 16 == 0 ? 16 : raw % 16);
-                                    return Text('${c['course_code'] ?? ''} • ${display}/16');
-                                  }),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('${c['course_code'] ?? ''} • Sessions: $raw'),
+                                      Text('Teacher: ${teacher != null ? (teacher['full_name'] ?? teacher['email']) : 'TBD'} • Attendance: ${details['total_attendance'] ?? 0}'),
+                                    ],
+                                  ),
                                   onTap: () => _onCourseTap(c),
                                 );
                               },
@@ -204,7 +230,19 @@ class _CoursesScreenState extends State<CoursesScreen> {
                         ),
                       ],
                     ))),
-
+      bottomNavigationBar: _role == 'student'
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton.icon(onPressed: _openStudentScanner, icon: const Icon(Icons.nfc), label: const Text('Scan')),
+                  ],
+                ),
+              ),
+            )
+          : null,
     );
   }
 }

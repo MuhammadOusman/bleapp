@@ -19,6 +19,29 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
   String _found = '';
   bool _scanning = false;
 
+  Map<String, dynamic>? _course;
+  bool _loadingDetails = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSessionDetails();
+  }
+
+  Future<void> _loadSessionDetails() async {
+    setState(() => _loadingDetails = true);
+    try {
+      final data = await _api.getSession(widget.sessionId);
+      setState(() {
+        _course = data['course'] as Map<String, dynamic>?;
+      });
+    } catch (e) {
+      debugPrint('[StudentScan] failed to load session details: $e');
+    } finally {
+      if (mounted) setState(() => _loadingDetails = false);
+    }
+  }
+
   void _startScan() async {
     setState(() {
       _scanning = true;
@@ -83,16 +106,24 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final courseTitle = _loadingDetails
+        ? 'Scan Session'
+        : (_course != null ? '${_course!['course_name'] ?? 'Course'} (${_course!['course_code'] ?? ''})' : 'Scan Session ${widget.sessionId.substring(0, 8)}');
+
+    final foundText = _found.isEmpty
+        ? (_loadingDetails ? 'Preparing to scan...' : 'Not yet scanned')
+        : (_course != null ? 'Found: ${_course!['course_name'] ?? ''} (${_course!['course_code'] ?? ''})' : 'Found: $_found');
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Scan Session ${widget.sessionId.substring(0, 8)}'),
+        title: Text(courseTitle),
         automaticallyImplyLeading: true,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Text(_found.isEmpty ? 'Not yet scanned' : 'Found: $_found'),
+            Text(foundText),
             const SizedBox(height: 20),
             ElevatedButton(onPressed: _scanning ? null : _startScan, child: Text(_scanning ? 'Scanning...' : 'Scan for Session'))
           ],
