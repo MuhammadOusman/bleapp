@@ -48,7 +48,8 @@ class ApiService {
     if (data.containsKey('token')) {
       await storage.write(key: 'token', value: data['token']);
       if (data.containsKey('profile')) {
-        await storage.write(key: 'role', value: (data['profile']['role']?.toString() ?? 'student'));
+        final roleStr = (data['profile']['role']?.toString() ?? 'student').toLowerCase();
+        await storage.write(key: 'role', value: roleStr);
       }
     }
     return data;

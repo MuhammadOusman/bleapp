@@ -8,13 +8,26 @@ exports.getCourses = async (req, res) => {
         if (role === 'teacher') {
             // Try teacher_id -> supports new schema where courses.teacher_id stores teacher profile id
             const { data: byId, error: byIdErr } = await supabase.from('courses').select('*').eq('teacher_id', userId);
-            if (byIdErr) return res.status(400).json({ error: byIdErr.message });
-            if (byId && byId.length > 0) return res.json(byId);
+            if (byIdErr) {
+                console.debug('getCourses: teacher_id query error, falling back to teacher_email', byIdErr.message);
+            } else if (byId && byId.length > 0) {
+                return res.json(byId);
+            }
 
-            // Fallback to email (legacy)
-            const { data: byEmail, error: byEmailErr } = await supabase.from('courses').select('*').eq('teacher_email', email);
-            if (byEmailErr) return res.status(400).json({ error: byEmailErr.message });
-            return res.json(byEmail || []);
+            // Fallback: resolve the teacher profile by email and query by teacher_id to avoid relying on a possibly-missing teacher_email column
+            const { data: teacherProfile, error: profileErr } = await supabase.from('profiles').select('id').eq('email', email).limit(1).single();
+            if (profileErr || !teacherProfile) {
+                // No profile found for the teacher email - return empty list
+                console.debug('getCourses: teacher profile not found for email, returning empty');
+                return res.json([]);
+            }
+            const teacherId = teacherProfile.id;
+            const { data: byTeacherId, error: byTeacherIdErr } = await supabase.from('courses').select('*').eq('teacher_id', teacherId);
+            if (byTeacherIdErr) {
+                console.error('getCourses: teacher_id query error', byTeacherIdErr.message);
+                return res.status(400).json({ error: byTeacherIdErr.message });
+            }
+            return res.json(byTeacherId || []);
         }
 
         // Non-teacher: return all courses (or adjust later for enrollment filtering)

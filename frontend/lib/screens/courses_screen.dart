@@ -48,8 +48,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final token = await _storage.read(key: 'token');
-    final role = await _storage.read(key: 'role') ?? 'student';
+    final rawRole = await _storage.read(key: 'role');
+    final role = (rawRole ?? 'student').toString().toLowerCase();
     if (token != null) {
+      // Set role immediately so teacher view appears even if network call fails
+      setState(() => _role = role);
       try {
         final courses = await _api.getCourses(token);
         // Get profile (to show student's name when role=student)
@@ -62,7 +65,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
         setState(() {
           _courses = courses;
-          _role = role;
         });
 
         // Load session counts for the courses (parallel)
@@ -79,10 +81,10 @@ class _CoursesScreenState extends State<CoursesScreen> {
           debugPrint('[Courses] failed to fetch session counts: $e');
         }
       } catch (e) {
-        // Log and show user-friendly message
+        // Log and show user-friendly message with details for debugging
         debugPrint('[Courses] getCourses error: $e');
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to load courses (see logs)')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load courses: $e')));
       }
     }
     setState(() => _loading = false);
