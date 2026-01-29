@@ -133,3 +133,34 @@ exports.approveByStudent = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Teacher-only endpoint: end a session (set expires_at = now and mark inactive)
+exports.endSession = async (req, res) => {
+    try {
+        const sessionId = req.params.id;
+        const teacher = req.user;
+
+        if (teacher.role !== 'teacher') return res.status(403).json({ error: 'Only teachers can end sessions' });
+        if (!sessionId) return res.status(400).json({ error: 'session id is required' });
+
+        // Load session and verify ownership (course teacher)
+        const { data: session, error: sessionErr } = await supabase.from('sessions').select('*').eq('id', sessionId).single();
+        if (sessionErr || !session) return res.status(404).json({ error: 'Session not found' });
+
+        // Verify teacher owns the course (if course record has teacher_email)
+        const { data: course } = await supabase.from('courses').select('id,teacher_email').eq('id', session.course_id).limit(1).single();
+        if (course && course.teacher_email && (course.teacher_email.toLowerCase() !== (teacher.email || '').toLowerCase())) {
+            return res.status(403).json({ error: 'You are not the teacher for this course' });
+        }
+
+        // Update session to mark as ended
+        const nowIso = new Date().toISOString();
+        const { error: updateError } = await supabase.from('sessions').update({ expires_at: nowIso, is_active: false }).eq('id', sessionId);
+        if (updateError) return res.status(400).json({ error: updateError.message });
+
+        return res.json({ success: true, ended_at: nowIso });
+    } catch (err) {
+        console.error('endSession error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

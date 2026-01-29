@@ -84,6 +84,17 @@ class ApiService {
     return data['session_id'] as String;
   }
 
+  Future<Map<String, dynamic>> endSession(String sessionId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/sessions/$sessionId/end');
+    _log('POST $url');
+    final res = await http.post(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    return _handle(res) as Map<String, dynamic>;
+  }
+
   /// Get list of students enrolled in the course (backend will return all students until
   /// enrollment mapping is added). Returns a list of maps with keys: id, full_name, email, lms_id
   Future<List<dynamic>> getCourseStudents(String courseId) async {

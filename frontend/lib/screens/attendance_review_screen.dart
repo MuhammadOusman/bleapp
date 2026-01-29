@@ -49,6 +49,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
     final conn = await Connectivity().checkConnectivity();
     if (conn != ConnectivityResult.none) {
       try {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
         for (var s in snapshot['students']) {
           if (s['present'] == true) {
             await _api.approveStudentById(snapshot['session_id'], s['student_id']);
@@ -70,7 +71,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       }
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved locally; will sync when online')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: sync not available, connect to sync.')));
     }
 
     setState(() => _saving = false);

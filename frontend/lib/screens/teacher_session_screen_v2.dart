@@ -64,6 +64,9 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
         if (result != ConnectivityResult.none) _autoSync();
       }
     });
+
+    // On startup check for unsynced snapshots and trigger sync check
+    _checkUnsyncedSnapshots();
   }
 
   @override
@@ -394,6 +397,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     final snapshots = await LocalStore.loadAttendanceSnapshots();
     final needSnap = snapshots.where((s) => s['synced'] != true).toList();
     if (needSnap.isEmpty) return;
+
+    // Inform user and begin syncing
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+
     _syncing = true;
     for (var snap in needSnap) {
       try {
@@ -412,6 +419,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
     await LocalStore.updateAttendanceSnapshots(snapshots);
     _syncing = false;
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance sync complete')));
   }
 
   Future<void> _syncAll() async {
@@ -433,6 +441,19 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
     }
     await LocalStore.updatePending(_detected);
     setState(() {});
+  }
+
+  Future<void> _checkUnsyncedSnapshots() async {
+    try {
+      final snaps = await LocalStore.loadAttendanceSnapshots();
+      final need = snaps.where((s) => s['synced'] != true).toList();
+      if (need.isNotEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device restart (not synced): syncing previous attendance pls wait.')));
+        _autoSync();
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   Future<void> _checkAdvertise() async {
@@ -568,12 +589,25 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
               Expanded(
                 child: ElevatedButton(
                   onPressed: _sessionId != null ? () async {
-                    // End attendance: stop beacon and scanning and open review page
+                    // End attendance: stop beacon and scanning, call endSession API and open review page
                     try { await _ble.stopBeacon(); } catch (_) {}
                     await _stopScanForStudents();
                     _elapsedTimer?.cancel();
+
                     final sessId = _sessionId;
+
+                    // Call backend to end session (best-effort; show status)
+                    if (sessId != null) {
+                      try {
+                        final resp = await _api.endSession(sessId);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session ended on server')));
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to end session on server: $e')));
+                      }
+                    }
+
                     setState(() { _sessionId = null; /* preserve students for review navigation */ });
+
                     if (sessId != null) {
                       Navigator.of(context).push(MaterialPageRoute(builder: (_) => AttendanceReviewScreen(
                         course: widget.course,
