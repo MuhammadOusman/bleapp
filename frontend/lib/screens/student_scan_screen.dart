@@ -6,8 +6,8 @@ import '../services/device_service.dart';
 import '../services/permission_service.dart';
 
 class StudentScanScreen extends StatefulWidget {
-  final Map course;
-  const StudentScanScreen({super.key, required this.course});
+  final String sessionId;
+  const StudentScanScreen({super.key, required this.sessionId});
 
   @override
   State<StudentScanScreen> createState() => _StudentScanScreenState();
@@ -47,7 +47,8 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
       if (_found.isEmpty) {
         setState(() => _found = uuid);
         try {
-          await _api.markAttendance(uuid, device);
+          // Use the provided session id directly (no backend resolution)
+          await _api.markAttendance(widget.sessionId, device);
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Marked present')));
         } on ApiException catch (e) {
@@ -64,8 +65,8 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
         }
       }
     });
-    // stop after 20s by design
-    Timer(const Duration(seconds: 20), () async {
+    // stop after 30s by design
+    Timer(const Duration(seconds: 30), () async {
       _ble.stopScan();
       try {
         await _ble.stopPeerBeacon();
@@ -83,14 +84,17 @@ class _StudentScanScreenState extends State<StudentScanScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Scan (${widget.course['name'] ?? ''})')),
+      appBar: AppBar(
+        title: Text('Scan Session ${widget.sessionId.substring(0, 8)}'),
+        automaticallyImplyLeading: true,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Text('Found: $_found'),
+            Text(_found.isEmpty ? 'Not yet scanned' : 'Found: $_found'),
             const SizedBox(height: 20),
-            ElevatedButton(onPressed: _scanning ? null : _startScan, child: const Text('Scan for Session'))
+            ElevatedButton(onPressed: _scanning ? null : _startScan, child: Text(_scanning ? 'Scanning...' : 'Scan for Session'))
           ],
         ),
       ),

@@ -2,14 +2,23 @@ const supabase = require('../config/supabase');
 
 exports.getCourses = async (req, res) => {
     try {
-        const { role, email } = req.user;
-        let query = supabase.from('courses').select('*');
+        const { role, email, id: userId } = req.user;
 
+        // Teachers: prefer matching by teacher_id (UUID) if present, fall back to teacher_email
         if (role === 'teacher') {
-            query = query.eq('teacher_email', email);
+            // Try teacher_id -> supports new schema where courses.teacher_id stores teacher profile id
+            const { data: byId, error: byIdErr } = await supabase.from('courses').select('*').eq('teacher_id', userId);
+            if (byIdErr) return res.status(400).json({ error: byIdErr.message });
+            if (byId && byId.length > 0) return res.json(byId);
+
+            // Fallback to email (legacy)
+            const { data: byEmail, error: byEmailErr } = await supabase.from('courses').select('*').eq('teacher_email', email);
+            if (byEmailErr) return res.status(400).json({ error: byEmailErr.message });
+            return res.json(byEmail || []);
         }
 
-        const { data, error } = await query;
+        // Non-teacher: return all courses (or adjust later for enrollment filtering)
+        const { data, error } = await supabase.from('courses').select('*');
         if (error) return res.status(400).json({ error: error.message });
 
         res.json(data);
@@ -60,6 +69,39 @@ exports.getCourseSessions = async (req, res) => {
         res.json({ sessions: sessionsWithCounts });
     } catch (err) {
         console.error('getCourseSessions error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// Get course details: teacher profile, totals
+exports.getCourseDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data: course, error: courseErr } = await supabase.from('courses').select('*').eq('id', id).single();
+        if (courseErr || !course) return res.status(404).json({ error: 'Course not found' });
+
+        // Teacher profile (if teacher_email exists)
+        let teacher = null;
+        if (course.teacher_email) {
+            const { data: t, error: tErr } = await supabase.from('profiles').select('id,full_name,email').eq('email', course.teacher_email).limit(1).single();
+            if (!tErr && t) teacher = t;
+        }
+
+        // Session count
+        const { count: sessionCount } = await supabase.from('sessions').select('*', { count: 'exact', head: true }).eq('course_id', id);
+
+        // Attendance total across all sessions
+        const { data: sessions } = await supabase.from('sessions').select('id').eq('course_id', id);
+        let attendanceCount = 0;
+        if (sessions && sessions.length > 0) {
+            const ids = sessions.map(s => s.id);
+            const { count: attCount } = await supabase.from('attendance').select('*', { count: 'exact', head: true }).in('session_id', ids);
+            attendanceCount = attCount || 0;
+        }
+
+        res.json({ course, teacher, total_sessions: sessionCount || 0, total_attendance: attendanceCount });
+    } catch (err) {
+        console.error('getCourseDetails error', err);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };

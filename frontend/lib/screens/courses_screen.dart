@@ -18,6 +18,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   final _storage = const FlutterSecureStorage();
   List _courses = [];
   String _role = 'student';
+  String _profileName = 'Student';
   bool _loading = true;
   Map<String, int> _sessionCounts = {}; // course_id -> count
 
@@ -51,6 +52,14 @@ class _CoursesScreenState extends State<CoursesScreen> {
     if (token != null) {
       try {
         final courses = await _api.getCourses(token);
+        // Get profile (to show student's name when role=student)
+        try {
+          final profile = await _api.getProfile();
+          if (mounted) setState(() => _profileName = profile['full_name'] ?? profile['email'] ?? 'Student');
+        } catch (e) {
+          // ignore
+        }
+
         setState(() {
           _courses = courses;
           _role = role;
@@ -91,7 +100,8 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Courses'),
+        title: Text(_role == 'student' ? _profileName : 'Courses'),
+        automaticallyImplyLeading: _role == 'student' ? false : true,
         actions: [
           if (_role == 'teacher') IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen())), icon: const Icon(Icons.dashboard), tooltip: 'Dashboard'),
           IconButton(

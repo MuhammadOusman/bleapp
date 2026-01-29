@@ -15,6 +15,7 @@ class _StudentSessionScannerState extends State<StudentSessionScanner> {
   final _ble = BleService();
   final _api = ApiService();
   bool _scanning = false;
+  bool _opened = false;
   final Map<String, Map<String, dynamic>> _found = {}; // sessionId -> data
   StreamSubscription? _sub;
 
@@ -22,32 +23,25 @@ class _StudentSessionScannerState extends State<StudentSessionScanner> {
     setState(() {
       _scanning = true;
       _found.clear();
+      _opened = false;
     });
 
     _ble.startScan((uuid, minor) async {
       if (minor != BleService.kTeacherMinorId) return;
-      if (_found.containsKey(uuid)) return;
+      if (_opened) return;
+      _opened = true;
 
-      // Try to resolve session info from backend
-      try {
-        final data = await _api.getSession(uuid);
-        // Expect { session: {...}, course: {...} }
-        final session = data['session'] as Map<String, dynamic>?;
-        final course = data['course'] as Map<String, dynamic>?;
-        if (session != null && course != null) {
-          setState(() {
-            _found[uuid] = {'session': session, 'course': course};
-          });
-        }
-      } catch (e) {
-        // ignore errors - session might be unknown to backend
-      }
-    });
-
-    // stop after 20s
-    Timer(const Duration(seconds: 20), () {
+      // Stop scanning and open the StudentScanScreen directly with the session id
       _ble.stopScan();
       setState(() => _scanning = false);
+      if (!mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => StudentScanScreen(sessionId: uuid)));
+    });
+
+    // stop after 30s
+    Timer(const Duration(seconds: 30), () {
+      _ble.stopScan();
+      if (mounted) setState(() => _scanning = false);
     });
   }
 
@@ -69,29 +63,18 @@ class _StudentSessionScannerState extends State<StudentSessionScanner> {
             ElevatedButton(onPressed: _scanning ? null : _startScan, child: Text(_scanning ? 'Scanning...' : 'Scan for Sessions')),
             const SizedBox(height: 12),
             Expanded(
-                child: _found.isEmpty
-                    ? const Center(child: Text('No sessions found. Try scanning.'))
-                    : ListView(
-                        children: _found.entries.map((e) {
-                          final uuid = e.key;
-                          final course = e.value['course'] as Map<String, dynamic>;
-                          final session = e.value['session'] as Map<String, dynamic>;
-                          final title = course['course_name'] ?? course['name'] ?? 'Course';
-                          final subtitle = session['is_active'] == false ? 'Ended' : 'Active';
-                          return Card(
-                            child: ListTile(
-                              title: Text('$title'),
-                              subtitle: Text('Session: $subtitle • id ${uuid.substring(0, 8)}'),
-                              trailing: ElevatedButton(
-                                onPressed: () {
-                                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => StudentScanScreen(course: course)));
-                                },
-                                child: const Text('Open'),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ))
+              child: _scanning
+                  ? const Center(child: Text('Scanning for sessions...'))
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 20),
+                        const Text('No sessions found. Try scanning.'),
+                        const SizedBox(height: 12),
+                        ElevatedButton(onPressed: _startScan, child: const Text('Retry')),
+                      ],
+                    ),
+            )
           ],
         ),
       ),

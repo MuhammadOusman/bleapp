@@ -135,6 +135,32 @@ class ApiService {
     return (data['sessions'] as List<dynamic>?) ?? [];
   }
 
+  /// Get course details (teacher name, totals)
+  Future<Map<String, dynamic>> getCourseDetails(String courseId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/courses/$courseId/details');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data as Map<String, dynamic>);
+  }
+
+  /// Get current user's profile
+  Future<Map<String, dynamic>> getProfile() async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/profiles/me');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    _log('RESPONSE ${res.statusCode} ${res.body?.length ?? 0} bytes');
+    final data = _handle(res);
+    return (data as Map<String, dynamic>);
+  }
+
   /// Get attendance rows for a session
   Future<List<dynamic>> getSessionAttendance(String sessionId) async {
     final token = await storage.read(key: 'token');
