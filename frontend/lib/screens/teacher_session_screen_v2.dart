@@ -25,6 +25,13 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   int _remaining = 0;
   Timer? _timer;
 
+  int _sessionsCount = 0;
+  static const int kMaxSessions = 16;
+
+  // Search state for enrolled students list
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
   bool _scanning = false;
   // _students: list of enrolled students (populated when session starts)
   List<Map<String, dynamic>> _students = []; // { student_id, name, present, discovered_at, synced }
@@ -63,6 +70,10 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       _realtimeTimer?.cancel();
       _realtimeTimer = null;
     } catch (_) {}
+    // Dispose controllers
+    try {
+      _searchController.dispose();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -83,6 +94,8 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       _sessionId = sid;
       _remaining = 15;
     });
+    // Refresh the session count since a session was just started
+    _loadSessionCount();
 
     // Load enrolled students for the course and initialize as absent
     try {
@@ -254,6 +267,7 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
   Future<void> _loadPending() async {
     final items = await LocalStore.loadPending();
     setState(() => _detected = items);
+    _loadSessionCount();
   }
 
   Future<void> _refreshAttendance() async {
@@ -290,6 +304,15 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
       print('[Refresh] error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Refresh failed: $e')));
+    }
+  }
+
+  Future<void> _loadSessionCount() async {
+    try {
+      final cnt = await _api.getSessionCount(widget.course['id']);
+      if (mounted) setState(() => _sessionsCount = cnt);
+    } catch (e) {
+      print('[SessionCount] failed to load for course ${widget.course['id']}: $e');
     }
   }
 
@@ -417,14 +440,15 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
   @override
   Widget build(BuildContext context) {
+    final courseTitle = widget.course['course_name'] ?? widget.course['name'] ?? '';
     return Scaffold(
-      appBar: AppBar(title: Text('Start Session (${widget.course['name'] ?? ''})')),
+      appBar: AppBar(title: Text(courseTitle)),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
             if (_sessionId != null) ...[
-              Text('Session: $_sessionId'),
+              Text('Sessions: $_sessionsCount/$kMaxSessions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               Text('Remaining: $_remaining s', style: const TextStyle(fontSize: 20)),
             ],
@@ -456,8 +480,35 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
                     const SizedBox(height: 8),
                     Text('Enrolled Students', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
-                    // Enrolled students list
-                    ..._students.map((s) => ListTile(
+                    // Search bar for enrolled students
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Search students by name or email',
+                          suffixIcon: _searchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    // Enrolled students list (filtered by search)
+                    ..._students.where((s) {
+                      final q = _searchQuery.toLowerCase();
+                      if (q.isEmpty) return true;
+                      final name = (s['name'] ?? '').toString().toLowerCase();
+                      final email = (s['email'] ?? '').toString().toLowerCase();
+                      return name.contains(q) || email.contains(q);
+                    }).map((s) => ListTile(
                           title: Text(s['name'] ?? 'Student'),
                           subtitle: Text(s['discovered_at'] ?? ''),
                           leading: Checkbox(value: s['present'] == true, onChanged: (_) {

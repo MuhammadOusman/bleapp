@@ -17,11 +17,24 @@ class _CoursesScreenState extends State<CoursesScreen> {
   List _courses = [];
   String _role = 'student';
   bool _loading = true;
+  Map<String, int> _sessionCounts = {}; // course_id -> count
+
+  // Search state for courses list
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    try {
+      _searchController.dispose();
+    } catch (_) {}
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -35,6 +48,20 @@ class _CoursesScreenState extends State<CoursesScreen> {
           _courses = courses;
           _role = role;
         });
+
+        // Load session counts for the courses (parallel)
+        try {
+          final futures = courses.map((c) async {
+            final cnt = await _api.getSessionCount(c['id']);
+            return {'id': c['id'], 'count': cnt};
+          }).toList();
+          final results = await Future.wait(futures);
+          final counts = <String, int>{};
+          for (var r in results) counts[r['id'] as String] = r['count'] as int;
+          if (mounted) setState(() => _sessionCounts = counts);
+        } catch (e) {
+          print('[Courses] failed to fetch session counts: $e');
+        }
       } catch (e) {
         // Log and show user-friendly message
         print('[Courses] getCourses error: $e');
@@ -91,16 +118,53 @@ class _CoursesScreenState extends State<CoursesScreen> {
                     ],
                   ),
                 )
-              : ListView.builder(
-                  itemCount: _courses.length,
-                  itemBuilder: (_, i) {
-                    final c = _courses[i];
-                    return ListTile(
-                      title: Text(c['name'] ?? c['course_name'] ?? 'Course'),
-                      subtitle: Text(c['id'] ?? ''),
-                      onTap: () => _onCourseTap(c),
-                    );
-                  },
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Search courses by name or code',
+                          suffixIcon: _searchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                      ),
+                    ),
+                    Expanded(
+                      child: Builder(builder: (_) {
+                        final q = _searchQuery.toLowerCase();
+                        final filtered = _courses.where((c) {
+                          if (q.isEmpty) return true;
+                          final name = (c['course_name'] ?? c['name'] ?? '').toString().toLowerCase();
+                          final code = (c['course_code'] ?? '').toString().toLowerCase();
+                          return name.contains(q) || code.contains(q);
+                        }).toList();
+                        if (filtered.isEmpty) {
+                          return Center(child: Text('No courses match "$_searchQuery"'));
+                        }
+                        return ListView.builder(
+                          itemCount: filtered.length,
+                          itemBuilder: (_, i) {
+                            final c = filtered[i];
+                            return ListTile(
+                              title: Text(c['course_name'] ?? c['name'] ?? 'Course'),
+                              subtitle: Text('${c['course_code'] ?? ''} • ${_sessionCounts[c['id']] ?? 0}/16'),
+                              onTap: () => _onCourseTap(c),
+                            );
+                          },
+                        );
+                      }),
+                    ),
+                  ],
                 )),
 
     );

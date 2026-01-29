@@ -62,6 +62,18 @@ class ApiService {
     return (data ?? []) as List<dynamic>;
   }
 
+  /// Get number of sessions started for a course
+  Future<int> getSessionCount(String courseId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/courses/$courseId/sessions_count');
+    _log('GET $url');
+    final res = await http.get(url, headers: headers);
+    final data = _handle(res);
+    return (data['count'] as int?) ?? 0;
+  }
+
   Future<String> startSession(String token, String courseId, int sessionNumber) async {
     final url = Uri.parse('$backendBase/sessions/start');
     final body = jsonEncode({'course_id': courseId, 'session_number': sessionNumber});

@@ -31,3 +31,15 @@ exports.getCourseStudents = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Returns the number of sessions that have been started for a course
+exports.getSessionCount = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { count, error } = await supabase.from('sessions').select('*', { count: 'exact', head: true }).eq('course_id', id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ count: count || 0 });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};

@@ -34,6 +34,8 @@ router.get('/admin/courses', authMiddleware, adminMiddleware, courseAdminControl
 
 // Get enrolled students for a course (protected)
 router.get('/courses/:id/students', authMiddleware, require('../controllers/courseController').getCourseStudents);
+// Get number of sessions started for a course
+router.get('/courses/:id/sessions_count', authMiddleware, require('../controllers/courseController').getSessionCount);
 
 // Admin routes - require admin role where specified
 const enrollmentController = require('../controllers/enrollmentController');
