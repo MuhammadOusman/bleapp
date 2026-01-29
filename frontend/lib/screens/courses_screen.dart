@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../services/sync_service.dart';
 import 'student_session_scanner.dart';
 import 'teacher_dashboard.dart';
+import 'course_detail_screen.dart';
 
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
@@ -73,9 +73,16 @@ class _CoursesScreenState extends State<CoursesScreen> {
         // Get profile (to show student's name when role=student)
         try {
           final profile = await _api.getProfile();
-          if (mounted) setState(() => _profileName = profile['full_name'] ?? profile['email'] ?? 'Student');
+          final fetchedName = profile['full_name'] ?? profile['email'] ?? 'Student';
+          // store for faster subsequent loads and to ensure the UI shows a name even if network fails later
+          try { await _storage.write(key: 'profile_full_name', value: fetchedName); } catch (_) {}
+          if (mounted) setState(() => _profileName = fetchedName);
         } catch (e) {
-          // ignore
+          // If fetching failed, try using a cached name so the UI isn't stuck as 'Student'
+          try {
+            final cached = await _storage.read(key: 'profile_full_name');
+            if (cached != null && mounted) setState(() => _profileName = cached);
+          } catch (_) {}
         }
 
         setState(() {
@@ -101,6 +108,36 @@ class _CoursesScreenState extends State<CoursesScreen> {
             _sessionCounts = counts;
             _courseDetails = detailsMap;
           });
+
+          // Compute student-specific dashboard totals when the current user is a student
+          if (role == 'student') {
+            final enrolled = courses;
+            int sessionsTotal = 0;
+            int attendanceTotal = 0;
+            for (var c in enrolled) {
+              final det = detailsMap[c['id']] ?? {};
+              sessionsTotal += (det['total_sessions'] as int?) ?? (counts[c['id']] ?? 0);
+              // Use per-student attendance when the key is present (even if it's 0). Fall back to total_attendance otherwise.
+              if (det.containsKey('student_attendance')) {
+                final val = det['student_attendance'];
+                if (val is int) attendanceTotal += val;
+                else if (val is num) attendanceTotal += val.toInt();
+                else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
+                else attendanceTotal += 0;
+              } else {
+                final val = det['total_attendance'];
+                if (val is int) attendanceTotal += val;
+                else if (val is num) attendanceTotal += val.toInt();
+                else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
+                else attendanceTotal += 0;
+              }
+            }
+            if (mounted) setState(() {
+              _enrolledCourses = List.from(enrolled);
+              _enrolledSessionsTotal = sessionsTotal;
+              _enrolledAttendanceTotal = attendanceTotal;
+            });
+          }
         } catch (e) {
           debugPrint('[Courses] failed to fetch course details/counts: $e');
         }
@@ -118,8 +155,8 @@ class _CoursesScreenState extends State<CoursesScreen> {
     if (_role == 'teacher') {
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => CourseSessionsScreen(course: course)));
     } else {
-      // Students should use the scanner entrypoint instead of opening a course
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const StudentSessionScanner()));
+      // Students should see course details instead of opening the course list
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => CourseDetailScreen(course: course)));
     }
   }
 
@@ -127,7 +164,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_role == 'student' ? _profileName : 'Courses'),
+        title: Text(_role == 'student' ? 'Dashboard' : 'Courses'),
         automaticallyImplyLeading: _role == 'student' ? false : true,
         actions: [
           if (_role == 'teacher') IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen())), icon: const Icon(Icons.dashboard), tooltip: 'Dashboard'),
@@ -155,11 +192,58 @@ class _CoursesScreenState extends State<CoursesScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('Scan for Sessions', style: TextStyle(fontSize: 18)),
-                      const SizedBox(height: 12),
-                      ElevatedButton(onPressed: _openStudentScanner, child: const Text('Scan for Sessions')),
+                      Text('Welcome, $_profileName', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      TextButton(onPressed: _load, child: const Text('Reload')),
+                      Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              Column(children: [const Text('Courses'), const SizedBox(height:4), Text('${_enrolledCourses.length}')]),
+                              Column(children: [const Text('Sessions'), const SizedBox(height:4), Text('$_enrolledSessionsTotal')]),
+                              Column(children: [const Text('Attendance'), const SizedBox(height:4), Text('$_enrolledAttendanceTotal')]),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      if (_enrolledCourses.isNotEmpty)
+                        SizedBox(
+                          height: 120,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _enrolledCourses.length,
+                            itemBuilder: (_, i) {
+                              final c = _enrolledCourses[i];
+                              final details = _courseDetails[c['id']] ?? {};
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(horizontal:8.0),
+                                child: InkWell(
+                                  onTap: () => _onCourseTap(c),
+                                  child: Card(
+                                    child: Container(
+                                      width: 220,
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(c['course_name'] ?? c['name'] ?? 'Course', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                          const SizedBox(height:6),
+                                          Text(c['course_code'] ?? ''),
+                                          const Spacer(),
+                                          Text('Sessions: ${details['total_sessions'] ?? _sessionCounts[c['id']] ?? 0} • Attendance: ${details.containsKey('student_attendance') ? (details['student_attendance'] is num ? (details['student_attendance'] as num).toInt() : (int.tryParse(details['student_attendance']?.toString() ?? '') ?? details['total_attendance'] ?? 0)) : (details['total_attendance'] ?? 0)}')
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 )

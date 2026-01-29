@@ -50,6 +50,9 @@ class ApiService {
       if (data.containsKey('profile')) {
         final roleStr = (data['profile']['role']?.toString() ?? 'student').toLowerCase();
         await storage.write(key: 'role', value: roleStr);
+        // Cache the profile name for fast display on subsequent launches
+        final profileName = (data['profile']['full_name'] ?? data['profile']['email'])?.toString();
+        if (profileName != null) await storage.write(key: 'profile_full_name', value: profileName);
       }
     }
     return data;

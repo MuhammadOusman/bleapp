@@ -121,14 +121,31 @@ exports.getCourseSessions = async (req, res) => {
         if (sessionsErr) return res.status(400).json({ error: sessionsErr.message });
 
         // Augment each session with its attendance count
-        // Note: For very large datasets, a Supabase RPC function (SQL view) is faster, 
-        // but this works fine for typical class sizes.
+        // For students, also include whether *this student* attended that session
+        const { role, id: userId } = req.user || {};
         const sessionsWithCounts = await Promise.all((sessions || []).map(async s => {
             const { count } = await supabase
                 .from('attendance')
                 .select('*', { count: 'exact', head: true })
                 .eq('session_id', s.id);
-            return { ...s, attendance_count: count || 0 };
+            const base = { ...s, attendance_count: count || 0 };
+
+            // If the requester is a student, check if they attended this session
+            if (role === 'student' && userId) {
+                try {
+                    const { count: scount } = await supabase
+                        .from('attendance')
+                        .select('id', { count: 'exact', head: true })
+                        .eq('session_id', s.id)
+                        .eq('student_id', userId);
+                    return { ...base, student_attended: (scount || 0) > 0 };
+                } catch (err) {
+                    console.error('failed to check student attendance for session', s.id, err);
+                    return { ...base, student_attended: false };
+                }
+            }
+
+            return base;
         }));
 
         res.json({ sessions: sessionsWithCounts });
@@ -182,6 +199,24 @@ exports.getCourseDetails = async (req, res) => {
             attendanceCount = count || 0;
         }
 
+        // 4. If the requester is a student, compute that student's attendance count for this course
+        let studentAttendance = 0;
+        try {
+            const { role, id: userId } = req.user || {};
+            if (role === 'student' && sessions && sessions.length > 0) {
+                const sessionIds = sessions.map(s => s.id);
+                const { count } = await supabase
+                    .from('attendance')
+                    .select('id', { count: 'exact', head: true })
+                    .in('session_id', sessionIds)
+                    .eq('student_id', userId);
+                studentAttendance = count || 0;
+            }
+        } catch (err) {
+            console.error('failed to compute student attendance', err);
+            // non-fatal; we still return course details
+        }
+
         res.json({
             course: {
                 id: course.id,
@@ -190,7 +225,8 @@ exports.getCourseDetails = async (req, res) => {
             },
             teacher: course.teacher,
             total_sessions: sessionCount || 0,
-            total_attendance: attendanceCount
+            total_attendance: attendanceCount,
+            student_attendance: studentAttendance
         });
 
     } catch (err) {
