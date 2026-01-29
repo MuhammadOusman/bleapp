@@ -1,54 +1,78 @@
 const supabase = require('../config/supabase');
 
-exports.createCourse = async (req, res) => {
-  try {
-    const { course_code, course_name, teacher_email } = req.body;
-    const payload = { course_code, course_name, teacher_email };
-    const { data, error } = await supabase.from('courses').insert([payload]).select().single();
-    if (error) return res.status(400).json({ error: error.message });
-    await supabase.from('audit_logs').insert([{ actor_profile_id: req.user.id, action: 'create_course', target_type: 'course', target_id: data.id, details: payload }]);
-    res.status(201).json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-};
-
-exports.updateCourse = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { course_name, teacher_email } = req.body;
-    const { data, error } = await supabase.from('courses').update({ course_name, teacher_email }).eq('id', id).select().single();
-    if (error) return res.status(400).json({ error: error.message });
-    await supabase.from('audit_logs').insert([{ actor_profile_id: req.user.id, action: 'update_course', target_type: 'course', target_id: id, details: { course_name, teacher_email } }]);
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-};
-
-exports.deleteCourse = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { error } = await supabase.from('courses').delete().eq('id', id);
-    if (error) return res.status(400).json({ error: error.message });
-    await supabase.from('audit_logs').insert([{ actor_profile_id: req.user.id, action: 'delete_course', target_type: 'course', target_id: id, details: {} }]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-};
-
+// List all courses (for Admin Grid)
 exports.listCourses = async (req, res) => {
-  try {
-    const { page = 1, per_page = 50, q } = req.query;
-    const from = (page -1) * per_page;
-    const to = from + per_page - 1;
-    let qObj = supabase.from('courses').select('*').range(from, to).order('course_code');
-    if (q) qObj = qObj.ilike('course_name', `%${q}%`);
-    const { data, error } = await qObj;
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ data });
-  } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+    try {
+        const { data, error } = await supabase
+            .from('courses')
+            .select('*, teacher:profiles!courses_teacher_id_fkey(full_name, email)') // Updated to use teacher_id FK
+            .order('course_code', { ascending: true });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Create Course (CRITICAL FIX: Uses teacher_id, not email)
+exports.createCourse = async (req, res) => {
+    const { course_code, course_name, teacher_id } = req.body;
+
+    if (!course_code || !course_name || !teacher_id) {
+        return res.status(400).json({ error: "Course Code, Name, and Teacher (ID) are required." });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('courses')
+            .insert([{ 
+                course_code, 
+                course_name, 
+                teacher_id // Must be UUID from dropdown
+            }])
+            .select()
+            .single();
+
+        if (error) {
+            if (error.code === '23505') return res.status(409).json({ error: "Course Code already exists." });
+            if (error.message.includes('not a Teacher')) return res.status(400).json({ error: "Selected user is not a Teacher." });
+            throw error;
+        }
+
+        res.status(201).json({ message: "Course created successfully", course: data });
+    } catch (err) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// Update Course
+exports.updateCourse = async (req, res) => {
+    const { id } = req.params;
+    const { course_code, course_name, teacher_id } = req.body;
+
+    try {
+        const { data, error } = await supabase
+            .from('courses')
+            .update({ course_code, course_name, teacher_id })
+            .eq('id', id)
+            .select();
+
+        if (error) throw error;
+        res.json({ message: "Course updated", course: data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Delete Course
+exports.deleteCourse = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase.from('courses').delete().eq('id', id);
+        if (error) throw error;
+        res.json({ message: "Course deleted" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 };

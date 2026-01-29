@@ -1,47 +1,181 @@
 const supabase = require('../config/supabase');
 
-exports.listPendingStudents = async (req, res) => {
-  try {
-    const { page = 1, per_page = 50 } = req.query;
-    const from = (page - 1) * per_page;
-    const to = from + per_page - 1;
-    const { data, error } = await supabase.from('pending_students').select('*').range(from, to);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ data });
-  } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+// --- READ OPERATIONS ---
+
+exports.getDashboardStats = async (req, res) => {
+    try {
+        const [students, teachers, courses, sessions] = await Promise.all([
+            supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'student'),
+            supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'teacher'),
+            supabase.from('courses').select('*', { count: 'exact', head: true }),
+            supabase.from('sessions').select('*', { count: 'exact', head: true }).eq('is_active', true)
+        ]);
+
+        res.json({
+            total_students: students.count || 0,
+            total_teachers: teachers.count || 0,
+            total_courses: courses.count || 0,
+            active_sessions: sessions.count || 0
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 };
 
-exports.approvePendingStudent = async (req, res) => {
-  try {
-    const { id } = req.params; // pending_students id
-    const { create_auth = false } = req.body;
-    const { data: pending } = await supabase.from('pending_students').select('*').eq('id', id).limit(1);
-    if (!pending || pending.length === 0) return res.status(404).json({ error: 'Pending student not found' });
-    const p = pending[0];
+// Dropdown Helper: Get all students
+exports.getAllStudents = async (req, res) => {
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, lms_id')
+        .eq('role', 'student');
+    
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+};
 
-    // If profile exists, update; else create profile without auth user
-    const { data: existing } = await supabase.from('profiles').select('id').ilike('email', p.email).limit(1);
-    let profileId;
-    if (existing && existing.length > 0) {
-      profileId = existing[0].id;
-      await supabase.from('profiles').update({ lms_id: p.lms_id, full_name: p.full_name }).eq('id', profileId);
-    } else {
-      // Create profile entry only; creating auth user is optional and should be controlled
-      const { data: ins } = await supabase.from('profiles').insert([{ email: p.email, full_name: p.full_name, lms_id: p.lms_id, role: 'student' }]).select().single();
-      profileId = ins.id;
+// Dropdown Helper: Get all teachers
+exports.getAllTeachers = async (req, res) => {
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('role', 'teacher');
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+};
+
+// --- WRITE OPERATIONS ---
+
+exports.createCourse = async (req, res) => {
+    const { course_code, course_name, teacher_id } = req.body;
+
+    // Validation: Ensure we are sending a UUID for teacher_id, not an email
+    if (!course_code || !course_name || !teacher_id) {
+        return res.status(400).json({ error: "Course Code, Name, and Teacher (ID) are required." });
     }
 
-    // mark pending as approved
-    await supabase.from('pending_students').update({ status: 'approved' }).eq('id', id);
+    try {
+        const { data, error } = await supabase
+            .from('courses')
+            .insert([{ 
+                course_code, 
+                course_name, 
+                teacher_id // UUID referencing profiles(id)
+            }])
+            .select()
+            .single();
 
-    // log audit
-    await supabase.from('audit_logs').insert([{ actor_profile_id: req.user.id, action: 'approve_pending_student', target_type: 'pending_student', target_id: id, details: { profile_id: profileId } }]);
+        if (error) {
+            if (error.code === '23505') return res.status(409).json({ error: "Course Code already exists." });
+            // This catches the trigger error if the UUID is not a teacher
+            if (error.message.includes('not a Teacher')) return res.status(400).json({ error: "Selected user is not a Teacher." });
+            return res.status(400).json({ error: error.message });
+        }
 
-    res.json({ profile_id: profileId });
-  } catch (err) {
-    console.error('approve pending error', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+        res.status(201).json({ message: "Course created successfully", course: data });
+    } catch (err) {
+        console.error("Create Course Error:", err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+exports.enrollStudent = async (req, res) => {
+    const { course_id, student_id } = req.body;
+
+    if (!course_id || !student_id) {
+        return res.status(400).json({ error: "Course and Student are required" });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('enrollments')
+            .insert([{ course_id, student_id }])
+            .select();
+
+        if (error) {
+            if (error.code === '23505') return res.status(409).json({ error: "Student is already enrolled." });
+            return res.status(400).json({ error: error.message });
+        }
+
+        res.status(201).json({ message: "Student enrolled successfully" });
+    } catch (err) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// --- REPORTING ---
+
+exports.getStudentStats = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        
+        const { data: enrollments } = await supabase
+            .from('enrollments')
+            .select('course:courses(id, course_code, course_name)')
+            .eq('student_id', studentId);
+
+        if (!enrollments) return res.json([]);
+
+        const stats = await Promise.all(enrollments.map(async (enr) => {
+            const course = enr.course;
+            const { count: total } = await supabase.from('sessions').select('*', { count: 'exact', head: true }).eq('course_id', course.id);
+            const { count: attended } = await supabase.from('attendance').select('session_id!inner(course_id)', { count: 'exact', head: true }).eq('student_id', studentId).eq('session_id.course_id', course.id);
+
+            return {
+                course_code: course.course_code,
+                course_name: course.course_name,
+                attendance_ratio: `${attended}/${total}`,
+                percentage: total > 0 ? ((attended/total)*100).toFixed(1) : 0
+            };
+        }));
+
+        res.json(stats);
+    } catch (err) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+exports.downloadReport = async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        
+        // 1. Fetch Data with Strict Filtering using !inner
+        const { data, error } = await supabase
+            .from('attendance')
+            .select(`
+                marked_at,
+                session:sessions!inner(session_number, created_at, course_id),
+                student:profiles(full_name, email, lms_id)
+            `)
+            .eq('session.course_id', courseId) // Filters by THIS course only
+            .order('marked_at', { ascending: false });
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        // 2. CHECK IF EMPTY
+        if (!data || data.length === 0) {
+            return res.status(404).json({ error: "No attendance records found for this course." });
+        }
+
+        // 3. Generate CSV
+        const headers = "Student Name,Email,LMS ID,Session #,Date,Time Marked\n";
+        const rows = data.map(row => {
+            const date = new Date(row.session.created_at).toLocaleDateString();
+            const time = new Date(row.marked_at).toLocaleTimeString();
+            
+            // Handle null profiles (if user deleted)
+            const name = row.student?.full_name || "Unknown";
+            const email = row.student?.email || "N/A";
+            const lmsId = row.student?.lms_id || "N/A";
+
+            return `"${name}","${email}","${lmsId}",${row.session.session_number},"${date}","${time}"`;
+        }).join("\n");
+
+        res.header('Content-Type', 'text/csv');
+        res.attachment(`report_course_${courseId}.csv`);
+        res.send(headers + rows);
+    } catch (err) {
+        console.error("Report Error:", err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 };

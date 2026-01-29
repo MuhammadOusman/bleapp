@@ -1,65 +1,78 @@
-
 const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/authController');
 
-const authMiddleware = require('../middleware/authMiddleware');
+// Controllers
+const authController = require('../controllers/authController');
 const courseController = require('../controllers/courseController');
 const attendanceController = require('../controllers/attendanceController');
+const profilesController = require('../controllers/profilesController');
+const courseAdminController = require('../controllers/courseAdminController'); // Logic moved here
+const enrollmentController = require('../controllers/enrollmentController');   // Logic moved here
+const adminController = require('../controllers/adminController');
+
+// Middlewares
+const authMiddleware = require('../middleware/authMiddleware');
 const adminMiddleware = require('../middleware/adminMiddleware');
 
+// ==========================================
+// 1. AUTHENTICATION
+// ==========================================
 router.post('/register', authController.register);
 router.post('/login', authController.login);
+router.get('/profiles/me', authMiddleware, profilesController.me);
 
-// Protected Routes
+// Admin Login
+router.post('/admin/login', authController.adminLogin);
+
+// ==========================================
+// 2. TEACHER & STUDENT (Core Features)
+// ==========================================
+
+// Courses
 router.get('/courses', authMiddleware, courseController.getCourses);
+router.get('/courses/:id/details', authMiddleware, courseController.getCourseDetails);
+router.get('/courses/:id/students', authMiddleware, courseController.getCourseStudents);
+router.get('/courses/:id/sessions', authMiddleware, courseController.getCourseSessions);
+router.get('/courses/:id/sessions_count', authMiddleware, courseController.getSessionCount);
+
+// Session Management
 router.post('/sessions/start', authMiddleware, attendanceController.startSession);
 router.post('/sessions/:id/end', authMiddleware, attendanceController.endSession);
 router.get('/sessions/:id', authMiddleware, attendanceController.getSessionById);
+
+// Attendance
 router.get('/sessions/:id/attendance', authMiddleware, attendanceController.getSessionAttendance);
 router.post('/attendance/mark', authMiddleware, attendanceController.markAttendance);
-// Teacher approval endpoint (approves by device_signature)
 router.post('/attendance/approve', authMiddleware, attendanceController.approveByTeacher);
-// Teacher approval endpoint (approves by student id)
 router.post('/attendance/approve_by_student', authMiddleware, attendanceController.approveByStudent);
 
-// Resolve an advertised string to a student profile (teacher helpers)
-const profilesController = require('../controllers/profilesController');
+// Helpers
 router.post('/profiles/resolve', authMiddleware, profilesController.resolveByAdvertised);
-router.get('/profiles/me', authMiddleware, profilesController.me);
 
-// Admin course CRUD (example skeleton)
-const courseAdminController = require('../controllers/courseAdminController');
+// ==========================================
+// 3. ADMIN PANEL (Protected by adminMiddleware)
+// ==========================================
+
+// A. Dashboard & Reports
+router.get('/admin/stats', authMiddleware, adminMiddleware, adminController.getDashboardStats);
+router.get('/admin/reports/:courseId', authMiddleware, adminMiddleware, adminController.downloadReport);
+router.get('/admin/student-stats/:studentId', authMiddleware, adminMiddleware, adminController.getStudentStats);
+router.get('/admin/users/students', authMiddleware, adminMiddleware, adminController.getAllStudents);
+router.get('/admin/users/teachers', authMiddleware, adminMiddleware, adminController.getAllTeachers);
+
+// B. Course Management (CRUD)
+router.get('/admin/courses', authMiddleware, adminMiddleware, courseAdminController.listCourses);
 router.post('/admin/courses', authMiddleware, adminMiddleware, courseAdminController.createCourse);
 router.put('/admin/courses/:id', authMiddleware, adminMiddleware, courseAdminController.updateCourse);
 router.delete('/admin/courses/:id', authMiddleware, adminMiddleware, courseAdminController.deleteCourse);
-router.get('/admin/courses', authMiddleware, adminMiddleware, courseAdminController.listCourses);
 
-// Get enrolled students for a course (protected)
-router.get('/courses/:id/students', authMiddleware, require('../controllers/courseController').getCourseStudents);
-// Get number of sessions started for a course
-router.get('/courses/:id/sessions_count', authMiddleware, require('../controllers/courseController').getSessionCount);
-// Get sessions for a course (for teacher dashboard)
-router.get('/courses/:id/sessions', authMiddleware, require('../controllers/courseController').getCourseSessions);
-// Get course details (teacher, totals)
-router.get('/courses/:id/details', authMiddleware, require('../controllers/courseController').getCourseDetails);
+// C. Enrollment Management
+router.get('/admin/courses/:id/enrollments', authMiddleware, adminMiddleware, enrollmentController.listEnrollments);
+router.post('/admin/courses/:id/enroll', authMiddleware, adminMiddleware, enrollmentController.enroll);
+router.delete('/admin/courses/:id/unenroll', authMiddleware, adminMiddleware, enrollmentController.unenroll);
 
-// Admin routes - require admin role where specified
-const enrollmentController = require('../controllers/enrollmentController');
-
-router.get('/courses/:id/enrollments', authMiddleware, enrollmentController.listEnrollments);
-router.post('/courses/:id/enrollments', authMiddleware, enrollmentController.enroll);
-router.delete('/courses/:id/enrollments', authMiddleware, adminMiddleware, enrollmentController.unenroll);
-router.post('/courses/:id/enrollments/bulk/preview', authMiddleware, adminMiddleware, enrollmentController.bulkEnrollPreview);
-router.post('/courses/:id/enrollments/bulk/commit', authMiddleware, adminMiddleware, enrollmentController.bulkEnrollCommit);
-
-// Pending students management
-const adminController = require('../controllers/adminController');
-router.get('/admin/pending_students', authMiddleware, adminMiddleware, adminController.listPendingStudents);
-router.post('/admin/pending_students/:id/approve', authMiddleware, adminMiddleware, adminController.approvePendingStudent);
-
-// Audit logs
-const auditController = require('../controllers/auditController');
-router.get('/admin/audit_logs', authMiddleware, adminMiddleware, auditController.listLogs);
+// Bulk Enrollments
+router.post('/admin/courses/bulk-preview', authMiddleware, adminMiddleware, enrollmentController.bulkEnrollPreview);
+router.post('/admin/courses/:id/bulk-commit', authMiddleware, adminMiddleware, enrollmentController.bulkEnrollCommit);
 
 module.exports = router;

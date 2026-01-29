@@ -139,12 +139,12 @@ exports.getCourseSessions = async (req, res) => {
 };
 
 // 5. GET COURSE DETAILS (Header Stats)
-// Logic: Single join to get Teacher details, then aggregate stats
 exports.getCourseDetails = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Fetch Course & Teacher Profile in one go
+        // 1. Fetch Course & Teacher Profile
+        // Note: The !courses_teacher_id_fkey syntax is correct based on your SQL schema.
         const { data: course, error: courseErr } = await supabase
             .from('courses')
             .select(`
@@ -161,20 +161,26 @@ exports.getCourseDetails = async (req, res) => {
         if (courseErr || !course) return res.status(404).json({ error: 'Course not found' });
 
         // 2. Get Total Sessions Count
-        const { count: sessionCount } = await supabase
+        const { count: sessionCount, data: sessions } = await supabase
             .from('sessions')
-            .select('*', { count: 'exact', head: true })
+            .select('id', { count: 'exact', head: false }) // Fetch IDs so we can use them below
             .eq('course_id', id);
 
-        // 3. Get Total Attendance Count (All students across all sessions)
-        // We use a subquery approach via the JS client
-        const { count: attendanceCount } = await supabase
-            .from('attendance')
-            .select('id', { count: 'exact', head: true })
-            .in('session_id', (
-                 // Subquery: Get all session IDs for this course
-                 supabase.from('sessions').select('id').eq('course_id', id)
-            ));
+        // 3. Get Total Attendance Count
+        // FIX: We manually extract the IDs array. 
+        // Supabase .in() expects an Array ['uuid1', 'uuid2'], not a query object.
+        let attendanceCount = 0;
+        
+        if (sessions && sessions.length > 0) {
+            const sessionIds = sessions.map(s => s.id);
+            
+            const { count } = await supabase
+                .from('attendance')
+                .select('id', { count: 'exact', head: true })
+                .in('session_id', sessionIds);
+                
+            attendanceCount = count || 0;
+        }
 
         res.json({
             course: {
@@ -182,9 +188,9 @@ exports.getCourseDetails = async (req, res) => {
                 course_code: course.course_code,
                 course_name: course.course_name,
             },
-            teacher: course.teacher, // Object: { full_name, email, id }
+            teacher: course.teacher,
             total_sessions: sessionCount || 0,
-            total_attendance: attendanceCount || 0
+            total_attendance: attendanceCount
         });
 
     } catch (err) {

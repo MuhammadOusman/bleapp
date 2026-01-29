@@ -1,8 +1,15 @@
 const supabase = require('../config/supabase');
 
+// 1. START SESSION
 exports.startSession = async (req, res) => {
     try {
         const { course_id, session_number } = req.body;
+        const user = req.user;
+
+        // Security: Ensure the user is a teacher or admin
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+            return res.status(403).json({ error: 'Unauthorized to start sessions' });
+        }
 
         const { data, error } = await supabase
             .from('sessions')
@@ -10,8 +17,7 @@ exports.startSession = async (req, res) => {
                 course_id,
                 session_number,
                 is_active: true,
-                // No hard expiry: allow null expires_at for manual end
-                expires_at: null
+                expires_at: null // Manual end
             }])
             .select().single();
 
@@ -22,27 +28,28 @@ exports.startSession = async (req, res) => {
     }
 };
 
+// 2. MARK ATTENDANCE (Student Only)
 exports.markAttendance = async (req, res) => {
     try {
         const { session_id, device_signature } = req.body;
-        const student = req.user; // From middleware
+        const student = req.user; 
 
         if (student.role !== 'student') return res.status(403).json({ error: 'Only students can mark attendance' });
 
-        // 1. Hardware Lock Verification (Prevent API Spoofing)
+        // A. Hardware Lock
         if (student.device_signature !== device_signature) {
             return res.status(403).json({ error: 'Device signature mismatch. Proxy detected.' });
         }
 
-        // 2. Session Expiry Check
+        // B. Expiry Check
         const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
         if (!session) return res.status(404).json({ error: 'Session not found' });
 
-        if (session.expires_at && new Date() > new Date(session.expires_at)) {
-            return res.status(410).json({ error: 'Session Expired' });
+        if (!session.is_active || (session.expires_at && new Date() > new Date(session.expires_at))) {
+            return res.status(410).json({ error: 'Session Expired or Inactive' });
         }
 
-        // 3. Mark Attendance
+        // C. Mark
         const { error: markError } = await supabase.from('attendance').insert([{
             session_id,
             student_id: student.id
@@ -57,32 +64,28 @@ exports.markAttendance = async (req, res) => {
     }
 };
 
-// Teacher-only endpoint: approve a detected device by device_signature
+// 3. APPROVE BY DEVICE (Teacher/Admin)
 exports.approveByTeacher = async (req, res) => {
     try {
         const { session_id, device_signature } = req.body;
-        const teacher = req.user;
+        const user = req.user;
 
-        if (teacher.role !== 'teacher') return res.status(403).json({ error: 'Only teachers can approve attendance' });
-        if (!session_id || !device_signature) return res.status(400).json({ error: 'session_id and device_signature are required' });
+        // Allow Admin to override
+        if (user.role !== 'teacher' && user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+        if (!session_id || !device_signature) return res.status(400).json({ error: 'Missing requirements' });
 
-        // Find session
         const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
         if (!session) return res.status(404).json({ error: 'Session not found' });
-        if (session.expires_at && new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired' });
+        // Teachers can approve even if session is expired, so we don't strictly check expiry here
 
-        // Resolve student by device_signature
+        // Find student
         const { data: profiles } = await supabase.from('profiles').select('*').eq('device_signature', device_signature).limit(1);
         const studentProfile = (profiles || [])[0];
-        if (!studentProfile) {
-            return res.status(404).json({ error: 'Student with given device signature not found' });
+        
+        if (!studentProfile || studentProfile.role !== 'student') {
+            return res.status(404).json({ error: 'Valid student not found for this device' });
         }
 
-        if (studentProfile.role !== 'student') {
-            return res.status(400).json({ error: 'Target user is not a student' });
-        }
-
-        // Insert attendance record for the student (do NOT assume device_signature column exists)
         const { error: markError } = await supabase.from('attendance').insert([{
             session_id,
             student_id: studentProfile.id
@@ -98,30 +101,19 @@ exports.approveByTeacher = async (req, res) => {
     }
 };
 
-// Teacher-only endpoint: approve attendance by student_id
+// 4. APPROVE BY STUDENT ID (Teacher/Admin)
 exports.approveByStudent = async (req, res) => {
     try {
         const { session_id, student_id } = req.body;
-        const teacher = req.user;
+        const user = req.user;
 
-        if (teacher.role !== 'teacher') return res.status(403).json({ error: 'Only teachers can approve attendance' });
-        if (!session_id || !student_id) return res.status(400).json({ error: 'session_id and student_id are required' });
+        if (user.role !== 'teacher' && user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+        if (!session_id || !student_id) return res.status(400).json({ error: 'Missing requirements' });
 
-        // Find session
-        const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
-        if (!session) return res.status(404).json({ error: 'Session not found' });
-        if (session.expires_at && new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired' });
-
-        // Find student profile
-        const { data: profiles } = await supabase.from('profiles').select('*').eq('id', student_id).limit(1);
-        const studentProfile = (profiles || [])[0];
-        if (!studentProfile) return res.status(404).json({ error: 'Student not found' });
-        if (studentProfile.role !== 'student') return res.status(400).json({ error: 'Target user is not a student' });
-
-        // Insert attendance
+        // Insert directly
         const { error: markError } = await supabase.from('attendance').insert([{
             session_id,
-            student_id: studentProfile.id
+            student_id
         }]);
 
         if (markError?.code === '23505') return res.status(200).json({ message: 'Already marked' });
@@ -129,33 +121,42 @@ exports.approveByStudent = async (req, res) => {
 
         return res.json({ success: true });
     } catch (err) {
-        console.error('approveByStudent error', err);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
 
-// Teacher-only endpoint: end a session (set expires_at = now and mark inactive)
+// 5. END SESSION (Teacher/Admin) - **UPDATED FOR NEW SCHEMA**
 exports.endSession = async (req, res) => {
     try {
         const sessionId = req.params.id;
-        const teacher = req.user;
+        const user = req.user;
 
-        if (teacher.role !== 'teacher') return res.status(403).json({ error: 'Only teachers can end sessions' });
-        if (!sessionId) return res.status(400).json({ error: 'session id is required' });
+        if (user.role !== 'teacher' && user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
-        // Load session and verify ownership (course teacher)
+        // Get Session
         const { data: session, error: sessionErr } = await supabase.from('sessions').select('*').eq('id', sessionId).single();
         if (sessionErr || !session) return res.status(404).json({ error: 'Session not found' });
 
-        // Verify teacher owns the course (if course record has teacher_email)
-        const { data: course } = await supabase.from('courses').select('id,teacher_email').eq('id', session.course_id).limit(1).single();
-        if (course && course.teacher_email && (course.teacher_email.toLowerCase() !== (teacher.email || '').toLowerCase())) {
-            return res.status(403).json({ error: 'You are not the teacher for this course' });
+        // If Teacher, verify ownership using TEACHER_ID (UUID) not email
+        if (user.role === 'teacher') {
+            const { data: course } = await supabase
+                .from('courses')
+                .select('id, teacher_id')
+                .eq('id', session.course_id)
+                .single();
+
+            if (course && course.teacher_id !== user.id) {
+                return res.status(403).json({ error: 'You do not own this course' });
+            }
         }
 
-        // Update session to mark as ended
+        // Update
         const nowIso = new Date().toISOString();
-        const { error: updateError } = await supabase.from('sessions').update({ expires_at: nowIso, is_active: false }).eq('id', sessionId);
+        const { error: updateError } = await supabase
+            .from('sessions')
+            .update({ expires_at: nowIso, is_active: false })
+            .eq('id', sessionId);
+
         if (updateError) return res.status(400).json({ error: updateError.message });
 
         return res.json({ success: true, ended_at: nowIso });
@@ -165,36 +166,70 @@ exports.endSession = async (req, res) => {
     }
 };
 
-// Get session by id with course info
+// 6. GET SESSION BY ID
 exports.getSessionById = async (req, res) => {
     try {
         const { id } = req.params;
         const { data: session, error: sessionErr } = await supabase.from('sessions').select('*').eq('id', id).single();
         if (sessionErr || !session) return res.status(404).json({ error: 'Session not found' });
 
-        const { data: course, error: courseErr } = await supabase.from('courses').select('id,course_name,course_code').eq('id', session.course_id).limit(1).single();
-
+        const { data: course, error: courseErr } = await supabase.from('courses').select('id,course_name,course_code').eq('id', session.course_id).single();
         if (courseErr) return res.status(400).json({ error: courseErr.message });
 
         res.json({ session, course });
     } catch (err) {
-        console.error('getSessionById error', err);
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
 
-// Get attendance rows for a session with student profile info
+// 7. GET ATTENDANCE LIST (Updated syntax for safety)
 exports.getSessionAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        // Try to get attendance with joined profiles if supported
-        const { data: rows, error } = await supabase.from('attendance').select('student_id,marked_at, profiles(id,full_name,email)').eq('session_id', id);
+        
+        // Use explicit join syntax for clarity
+        const { data: rows, error } = await supabase
+            .from('attendance')
+            .select(`
+                student_id,
+                marked_at,
+                student:profiles!attendance_student_id_fkey (id, full_name, email, lms_id)
+            `)
+            .eq('session_id', id);
+
         if (error) return res.status(400).json({ error: error.message });
-        // Normalize rows
-        const result = (rows || []).map(r => ({ student_id: r.student_id, marked_at: r.marked_at, profile: r.profiles || null }));
+
+        // Normalize
+        const result = (rows || []).map(r => ({
+            student_id: r.student_id,
+            marked_at: r.marked_at,
+            profile: r.student
+        }));
+
         res.json({ attendees: result });
     } catch (err) {
-        console.error('getSessionAttendance error', err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
+// 8. [NEW FOR ADMIN] DELETE ATTENDANCE (Un-mark)
+// Useful if a student was marked by mistake
+exports.deleteAttendance = async (req, res) => {
+    try {
+        const { session_id, student_id } = req.body;
+        const user = req.user;
+
+        if (user.role !== 'admin' && user.role !== 'teacher') return res.status(403).json({ error: 'Unauthorized' });
+
+        const { error } = await supabase
+            .from('attendance')
+            .delete()
+            .eq('session_id', session_id)
+            .eq('student_id', student_id);
+
+        if (error) return res.status(400).json({ error: error.message });
+        res.json({ success: true, message: 'Attendance record removed' });
+    } catch (err) {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
