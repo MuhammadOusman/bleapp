@@ -10,7 +10,8 @@ exports.startSession = async (req, res) => {
                 course_id,
                 session_number,
                 is_active: true,
-                expires_at: new Date(Date.now() + 15000).toISOString() // Exactly 15s from now
+                // No hard expiry: allow null expires_at for manual end
+                expires_at: null
             }])
             .select().single();
 
@@ -37,8 +38,8 @@ exports.markAttendance = async (req, res) => {
         const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
         if (!session) return res.status(404).json({ error: 'Session not found' });
 
-        if (new Date() > new Date(session.expires_at)) {
-            return res.status(410).json({ error: 'Session Expired (15s window closed)' });
+        if (session.expires_at && new Date() > new Date(session.expires_at)) {
+            return res.status(410).json({ error: 'Session Expired' });
         }
 
         // 3. Mark Attendance
@@ -68,7 +69,7 @@ exports.approveByTeacher = async (req, res) => {
         // Find session
         const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
         if (!session) return res.status(404).json({ error: 'Session not found' });
-        if (new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired (15s window closed)' });
+        if (session.expires_at && new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired' });
 
         // Resolve student by device_signature
         const { data: profiles } = await supabase.from('profiles').select('*').eq('device_signature', device_signature).limit(1);
@@ -109,7 +110,7 @@ exports.approveByStudent = async (req, res) => {
         // Find session
         const { data: session } = await supabase.from('sessions').select('*').eq('id', session_id).single();
         if (!session) return res.status(404).json({ error: 'Session not found' });
-        if (new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired (15s window closed)' });
+        if (session.expires_at && new Date() > new Date(session.expires_at)) return res.status(410).json({ error: 'Session Expired' });
 
         // Find student profile
         const { data: profiles } = await supabase.from('profiles').select('*').eq('id', student_id).limit(1);
