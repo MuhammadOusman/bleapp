@@ -27,11 +27,11 @@ class _LoginScreenState extends State<LoginScreen> {
       } else {
         final res = await _api.login(_emailCtrl.text.trim(), _passCtrl.text.trim(), device);
         // Debug: log response
-        print('[Login] response: $res');
+        debugPrint('[Login] response: $res');
         if (res.containsKey('token')) {
           final role = res['profile']?['role'] ?? 'student';
           final token = res['token'];
-          print('[Login] token: ${token.toString().substring(0, token.toString().length > 8 ? 8 : token.toString().length)}... role: $role');
+          debugPrint('[Login] token: ${token.toString().substring(0, token.toString().length > 8 ? 8 : token.toString().length)}... role: $role');
           if (!mounted) return;
           // Show a small dialog confirming role for debugging
           showDialog(context: context, builder: (_) => AlertDialog(

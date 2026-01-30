@@ -1,38 +1,48 @@
-import 'package:flutter/material.dart';
-import '../services/local_store.dart';
-import '../services/api_service.dart';
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'teacher_dashboard.dart';
+import 'package:flutter/material.dart';
+
+import '../services/api_service.dart';
+import '../services/local_store.dart';
 
 class AttendanceReviewScreen extends StatefulWidget {
   final Map course;
   final String sessionId;
   final int sessionNumber;
   final List<Map<String, dynamic>> students;
+  final bool sessionSynced;
   final bool autoSave;
 
-  const AttendanceReviewScreen({super.key, required this.course, required this.sessionId, required this.sessionNumber, required this.students, this.autoSave = false});
+  const AttendanceReviewScreen({
+    super.key,
+    required this.course,
+    required this.sessionId,
+    required this.sessionNumber,
+    required this.students,
+    this.sessionSynced = false,
+    this.autoSave = false,
+  });
 
   @override
   State<AttendanceReviewScreen> createState() => _AttendanceReviewScreenState();
 }
 
 class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
-  late List<Map<String, dynamic>> _students;
   final _api = ApiService();
+  late List<Map<String, dynamic>> _students;
   bool _saving = false;
+  late bool _sessionSynced;
 
   @override
   void initState() {
     super.initState();
     _students = widget.students.map((s) => Map<String, dynamic>.from(s)).toList();
+    _sessionSynced = widget.sessionSynced;
 
-    // If caller requested auto-save, trigger save after first frame so
-    // UI is fully built and SnackBars/dialogs work correctly.
     if (widget.autoSave == true) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        // Ask for confirmation before auto-saving
-        final choice = await showDialog<bool>(
+        final confirm = await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
             title: const Text('Confirm Save'),
@@ -43,7 +53,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
             ],
           ),
         );
-        if (choice == true) {
+        if (confirm == true) {
           await _saveAttendance();
         }
       });
@@ -51,7 +61,9 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   }
 
   Future<void> _saveAttendance() async {
+    if (_sessionSynced || _saving) return;
     setState(() => _saving = true);
+
     final snapshot = {
       'course_id': widget.course['id'],
       'course_name': widget.course['course_name'] ?? widget.course['name'],
@@ -59,37 +71,38 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       'session_id': widget.sessionId,
       'session_number': widget.sessionNumber,
       'created_at': DateTime.now().toIso8601String(),
-      'students': _students.map((s) => {
-        'student_id': s['student_id'],
-        'name': s['name'],
-        'present': s['present'] == true,
-      }).toList(),
+      'students': _students
+          .map((s) => {
+                'student_id': s['student_id'],
+                'name': s['name'],
+                'present': s['present'] == true,
+              })
+          .toList(),
       'synced': false,
     };
 
-    // Check connectivity first
     final conn = await Connectivity().checkConnectivity();
-    if (conn == ConnectivityResult.none) {
-      // Offline: save locally only
+    final isOffline = conn.isEmpty || conn.every((r) => r == ConnectivityResult.none);
+    if (isOffline) {
       await LocalStore.addAttendanceSnapshot(snapshot);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: saved locally. Will sync when online.')));
       setState(() => _saving = false);
-      // After saving, return to Dashboard for teacher flows
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
+      Navigator.of(context).pop('saved');
       return;
     }
 
-    // Online: Try to upload directly. On failure, offer to Save Locally or Discard.
     try {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+      }
+
       for (var s in snapshot['students']) {
         if (s['present'] == true) {
           await _api.approveStudentById(snapshot['session_id'], s['student_id']);
         }
       }
 
-      // On success, ensure any local snapshot for this session is removed
       try {
         await LocalStore.removeAttendanceSnapshotsForSession(snapshot['session_id']);
       } catch (_) {}
@@ -97,12 +110,10 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance saved and synced')));
       setState(() => _saving = false);
-      // After successful save, navigate back to the teacher dashboard
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
-      return;
+      Navigator.of(context).pop('saved');
     } catch (e) {
-      // Upload failed. Ask the user whether to save locally or discard.
       if (!mounted) return;
+
       final choice = await showDialog<String>(
         context: context,
         builder: (_) => AlertDialog(
@@ -118,24 +129,47 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
 
       if (choice == 'save') {
         await LocalStore.addAttendanceSnapshot(snapshot);
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved locally; will retry when online.')));
         setState(() => _saving = false);
-        // After saving locally, return to Dashboard for teacher flows
-        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()));
-        return;
+        Navigator.of(context).pop('saved');
       } else if (choice == 'retry') {
-        // try again recursively (but avoid infinite loops)
         setState(() => _saving = false);
         await _saveAttendance();
-        return;
       } else {
-        // discard
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance discarded')));
         setState(() => _saving = false);
-        Navigator.of(context).pop();
-        return;
+        Navigator.of(context).pop('discard');
+      }
+    }
+  }
+
+  Future<void> _discardAttendance() async {
+    if (_sessionSynced || _saving) return;
+    setState(() => _saving = true);
+
+    try {
+      await LocalStore.removeAttendanceSnapshotsForSession(widget.sessionId);
+    } catch (_) {}
+
+    final conn = await Connectivity().checkConnectivity();
+    final isOffline = conn.isEmpty || conn.every((r) => r == ConnectivityResult.none);
+    if (isOffline) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: cannot discard. Connect to internet to delete session.')));
+      }
+      setState(() => _saving = false);
+      return;
+    }
+
+    try {
+      await _api.deleteSession(widget.sessionId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session discarded and removed')));
+      Navigator.of(context).pop('discard');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to discard session: $e')));
+        setState(() => _saving = false);
       }
     }
   }
@@ -143,38 +177,43 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   @override
   Widget build(BuildContext context) {
     final courseTitle = '${widget.course['course_name'] ?? widget.course['name'] ?? ''}${widget.course['course_code'] != null ? ' (${widget.course['course_code']})' : ''}';
+
     return Scaffold(
       appBar: AppBar(title: Text('$courseTitle — Session ${widget.sessionNumber}')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            Expanded(child: ListView.builder(
-              itemCount: _students.length,
-              itemBuilder: (_, i) {
-                final s = _students[i];
-                return CheckboxListTile(
-                  title: Text(s['name'] ?? 'Student'),
-                  value: s['present'] == true,
-                  onChanged: (v) => setState(() => s['present'] = v == true),
-                );
-              },
-            )),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _students.length,
+                itemBuilder: (_, i) {
+                  final s = _students[i];
+                  return CheckboxListTile(
+                    title: Text(s['name'] ?? 'Student'),
+                    value: s['present'] == true,
+                    onChanged: _sessionSynced || _saving ? null : (v) => setState(() => s['present'] = v == true),
+                  );
+                },
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0),
               child: Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _saving ? null : () { Navigator.of(context).pop(); },
+                      onPressed: _saving || _sessionSynced ? null : _discardAttendance,
                       child: const Text('Discard'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: _saving ? null : _saveAttendance,
-                      child: _saving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save Attendance'),
+                      onPressed: _saving || _sessionSynced ? null : _saveAttendance,
+                      child: _saving
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('Save Attendance'),
                     ),
                   ),
                 ],

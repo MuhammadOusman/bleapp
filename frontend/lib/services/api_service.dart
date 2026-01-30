@@ -100,6 +100,16 @@ class ApiService {
     return _handle(res) as Map<String, dynamic>;
   }
 
+  Future<void> deleteSession(String sessionId) async {
+    final token = await storage.read(key: 'token');
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    final url = Uri.parse('$backendBase/sessions/$sessionId');
+    _log('DELETE $url');
+    final res = await http.delete(url, headers: headers);
+    _handle(res);
+  }
+
   /// Get list of students enrolled in the course (backend will return all students until
   /// enrollment mapping is added). Returns a list of maps with keys: id, full_name, email, lms_id
   Future<List<dynamic>> getCourseStudents(String courseId) async {

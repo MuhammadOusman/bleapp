@@ -1,558 +1,463 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../services/api_service.dart';
 import '../services/ble_service.dart';
-import '../services/permission_service.dart';
 import '../services/local_store.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../services/permission_service.dart';
 import 'attendance_review_screen.dart';
 
 class TeacherSessionScreenV2 extends StatefulWidget {
-  final Map course;
-  final String? initialSessionId;
-  const TeacherSessionScreenV2({super.key, required this.course, this.initialSessionId});
+	final Map course;
+	final String? initialSessionId;
 
-  @override
-  State<TeacherSessionScreenV2> createState() => _TeacherSessionScreenV2State();
+	const TeacherSessionScreenV2({super.key, required this.course, this.initialSessionId});
+
+	@override
+	State<TeacherSessionScreenV2> createState() => _TeacherSessionScreenV2State();
 }
 
 class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
-  final _api = ApiService();
-  final _ble = BleService();
-  final _storage = const FlutterSecureStorage();
+	static const int kMaxSessions = 16;
 
-  String? _sessionId;
+	final _api = ApiService();
+	final _ble = BleService();
+	final _storage = const FlutterSecureStorage();
 
-  int _sessionsCount = 0;
-  static const int kMaxSessions = 16;
+	String? _sessionId;
+	int _sessionsCount = 0;
+	bool _scanning = false;
+	int _elapsedSeconds = 0;
 
-  // Search state for enrolled students list
-  String _searchQuery = '';
-  final TextEditingController _searchController = TextEditingController();
+	final TextEditingController _searchController = TextEditingController();
+	String _searchQuery = '';
 
-  bool _scanning = false;
+	List<Map<String, dynamic>> _students = [];
 
-  // Elapsed seconds counter for open attendance
-  int _elapsedSeconds = 0;
-  Timer? _elapsedTimer;
-  // _students: list of enrolled students (populated when session starts)
-  List<Map<String, dynamic>> _students = []; // { student_id, name, present, discovered_at, synced }
+	StreamSubscription<dynamic>? _connSub;
+	bool _syncing = false;
+	Timer? _realtimeTimer;
+	Timer? _elapsedTimer;
 
-  // Detected devices that could not be resolved to an enrolled student
-  List<Map<String, dynamic>> _detected = []; // { device_signature, discovered_at, approved, synced }
+	@override
+	void initState() {
+		super.initState();
+		_loadSessionCount();
 
-  StreamSubscription<dynamic>? _connSub;
-  bool _syncing = false;
+		_connSub = Connectivity().onConnectivityChanged.listen((dynamic result) {
+			if (result is List) {
+				final anyOnline = result.any((r) => r != ConnectivityResult.none);
+				if (anyOnline) _autoSync();
+			} else if (result is ConnectivityResult) {
+				if (result != ConnectivityResult.none) _autoSync();
+			}
+		});
 
-  // Poll timer for realtime fallback
-  Timer? _realtimeTimer;
+		_checkUnsyncedSnapshots();
 
-  @override
-  void initState() {
-    super.initState();
-    _loadPending();
-    // Ensure session count is loaded immediately when opening this screen
-    _loadSessionCount();
+		if (widget.initialSessionId != null) {
+			WidgetsBinding.instance.addPostFrameCallback((_) {
+				_onSessionStarted(widget.initialSessionId!);
+			});
+		}
+	}
 
-    _connSub = Connectivity().onConnectivityChanged.listen((dynamic result) {
-      // On some platforms the stream emits a List<ConnectivityResult), on others a single ConnectivityResult
-      if (result is List) {
-        final anyOnline = result.any((r) => r != ConnectivityResult.none);
-        if (anyOnline) _autoSync();
-      } else if (result is ConnectivityResult) {
-        if (result != ConnectivityResult.none) _autoSync();
-      }
-    });
+	@override
+	void dispose() {
+		_ble.stopBeacon();
+		_ble.stopScan();
+		_connSub?.cancel();
+		_realtimeTimer?.cancel();
+		_elapsedTimer?.cancel();
+		_searchController.dispose();
+		super.dispose();
+	}
 
-    // On startup check for unsynced snapshots and trigger sync check
-    _checkUnsyncedSnapshots();
+	Future<void> _startSession() async {
+		final token = await _storage.read(key: 'token');
+		if (token == null) return;
 
-    // If this screen was opened with an existing session ID (started from course list), attach to it
-    if (widget.initialSessionId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _onSessionStarted(widget.initialSessionId!);
-      });
-    }
-  }
+		final allowed = await PermissionService.requestBlePermissions();
+		if (!allowed) {
+			if (!mounted) return;
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth permissions are required')));
+			await PermissionService.openAppSettingsIfNeeded();
+			return;
+		}
 
-  @override
-  void dispose() {
-    _ble.stopBeacon();
-    _ble.stopScan();
-    _connSub?.cancel();
-    try {
-      _realtimeTimer?.cancel();
-      _realtimeTimer = null;
-    } catch (_) {}
-    // Dispose controllers
-    try {
-      _searchController.dispose();
-    } catch (_) {}
-    super.dispose();
-  }
+		final sid = await _api.startSession(token, widget.course['id'], 1);
+		await _onSessionStarted(sid);
+	}
 
-  Future<void> _startSession() async {
-    final token = await _storage.read(key: 'token');
-    if (token == null) return;
+	Future<void> _onSessionStarted(String sid) async {
+		setState(() => _sessionId = sid);
+		_loadSessionCount();
 
-    final allowed = await PermissionService.requestBlePermissions();
-    if (!allowed) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth permissions are required')));
-      await PermissionService.openAppSettingsIfNeeded();
-      return;
-    }
+		try {
+			final students = await _api.getCourseStudents(widget.course['id']);
+			setState(() {
+				_students = students
+						.map<Map<String, dynamic>>((s) => {
+									'student_id': s['id'],
+									'name': (s['full_name'] ?? s['email'] ?? 'Student') as String,
+									'email': s['email'],
+									'present': false,
+									'discovered_at': null,
+									'synced': false,
+								})
+						.toList();
+			});
+		} catch (e) {
+			debugPrint('[Start] failed to load students: $e');
+		}
 
-    final sid = await _api.startSession(token, widget.course['id'], 1);
-    await _onSessionStarted(sid);
-  }
+		_startPollAttendance(sid);
 
-  /// Common flow for after a session id exists (either started here or passed-in)
-  Future<void> _onSessionStarted(String sid) async {
-    setState(() {
-      _sessionId = sid;
-    });
-    // Refresh the session count since a session was just started
-    _loadSessionCount();
+		final status = await _ble.checkTransmissionSupport();
+		if (!status) {
+			if (!mounted) return;
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device does not support BLE advertising')));
+			return;
+		}
+		await _ble.startBeacon(sid);
 
-    // Load enrolled students for the course and initialize as absent
-    try {
-      final students = await _api.getCourseStudents(widget.course['id']);
-      setState(() {
-        _students = students.map<Map<String, dynamic>>((s) => {
-          'student_id': s['id'],
-          'name': (s['full_name'] ?? s['email'] ?? 'Student') as String,
-          'present': false,
-          'discovered_at': null,
-          'synced': false,
-        }).toList();
-      });
-    } catch (e) {
-      debugPrint('[Start] failed to load students: $e');
-    }
+		_elapsedSeconds = 0;
+		_elapsedTimer?.cancel();
+		_elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+			if (!mounted) return;
+			setState(() => _elapsedSeconds += 1);
+		});
 
-    // Poll attendance table every 2s for this session (simple realtime fallback)
-    // Some DBs may not have `device_signature` column. Track support and fall back.
-    bool attendanceHasDeviceSignature = true;
-    _realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
-      try {
-        dynamic resp;
-        if (attendanceHasDeviceSignature) {
-          try {
-            resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at,device_signature').eq('session_id', sid);
-          } catch (e) {
-            final msg = e.toString();
-            // If the error indicates missing column, flip the flag and retry without
-            if (msg.contains('device_signature') || msg.contains('column "device_signature"')) {
-              attendanceHasDeviceSignature = false;
-              debugPrint('[Poll] device_signature column missing, switching fallback query');
-              resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at').eq('session_id', sid);
-            } else {
-              rethrow;
-            }
-          }
-        } else {
-          resp = await Supabase.instance.client.from('attendance').select('id,student_id,marked_at').eq('session_id', sid);
-        }
+		if (!_scanning) await _startScanForStudents();
+	}
 
-        // Debugging: log raw response and type
-        try {
-          debugPrint('[Poll] rawResp type=${resp.runtimeType} value=$resp');
-        } catch (_) {}
+	void _startPollAttendance(String sessionId) {
+		_realtimeTimer?.cancel();
+		bool attendanceHasDeviceSignature = true;
 
-        final rows = (resp as List<dynamic>?) ?? [];
-        debugPrint('[Poll] fetched ${rows.length} rows for session=$sid');
-        for (var r in rows) {
-          final studentId = r['student_id'];
-          final exists = _detected.any((d) => d['student_id'] == studentId);
-          if (!exists) {
-            // best-effort fetch profile name
-            final profileRes = await Supabase.instance.client.from('profiles').select('id,full_name').eq('id', studentId).limit(1);
-            final profiles = (profileRes as List<dynamic>?) ?? [];
-            final name = profiles.isNotEmpty ? (profiles[0]['full_name'] as String? ?? 'Student') : 'Student';
-            setState(() {
-              _detected.add({
-                'session_id': sid,
-                'student_id': studentId,
-                'device_signature': attendanceHasDeviceSignature ? (r['device_signature'] ?? 'unknown') : 'unknown',
-                'discovered_at': r['marked_at'] ?? DateTime.now().toIso8601String(),
-                'approved': true,
-                'synced': true,
-                'name': name,
-              });
-            });
-          }
-        }
-      } catch (e) {
-        debugPrint('[Poll] error: $e');
-      }
-    });
-    final status = await _ble.checkTransmissionSupport();
-    if (!status) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device does not support BLE advertising')));
-      return;
-    }
+		_realtimeTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
+			try {
+				dynamic resp;
+				if (attendanceHasDeviceSignature) {
+					try {
+						resp = await Supabase.instance.client
+								.from('attendance')
+								.select('id,student_id,marked_at,device_signature')
+								.eq('session_id', sessionId);
+					} catch (e) {
+						final msg = e.toString();
+						if (msg.contains('device_signature') || msg.contains('column "device_signature"')) {
+							attendanceHasDeviceSignature = false;
+							resp = await Supabase.instance.client
+									.from('attendance')
+									.select('id,student_id,marked_at')
+									.eq('session_id', sessionId);
+						} else {
+							rethrow;
+						}
+					}
+				} else {
+					resp = await Supabase.instance.client
+							.from('attendance')
+							.select('id,student_id,marked_at')
+							.eq('session_id', sessionId);
+				}
 
-    await _ble.startBeacon(sid);
+				final rows = (resp as List<dynamic>?) ?? [];
+				for (var r in rows) {
+					final studentId = r['student_id'];
+					final idx = _students.indexWhere((s) => s['student_id'] == studentId);
+					if (idx >= 0) {
+						final discovered = r['marked_at'] ?? DateTime.now().toIso8601String();
+						if (_students[idx]['present'] != true) {
+							setState(() {
+								_students[idx]['present'] = true;
+								_students[idx]['discovered_at'] = discovered;
+								_students[idx]['synced'] = true;
+							});
+						}
+					}
+				}
+			} catch (e) {
+				debugPrint('[Poll] error: $e');
+			}
+		});
+	}
 
-    // Start elapsed seconds timer (counts up until End Attendance)
-    _elapsedSeconds = 0;
-    _elapsedTimer?.cancel();
-    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) return;
-      setState(() => _elapsedSeconds += 1);
-    });
+	Future<void> _startScanForStudents() async {
+		if (_sessionId == null) {
+			if (!mounted) return;
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Start a session first')));
+			return;
+		}
 
-    // Ensure we are scanning continuously for students while session is active
-    if (!_scanning) await _startScanForStudents();
-  }
+		final allowed = await PermissionService.requestBlePermissions();
+		if (!allowed) {
+			if (!mounted) return;
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth/Location permissions are required')));
+			await PermissionService.openAppSettingsIfNeeded();
+			return;
+		}
 
-  Future<void> _startScanForStudents() async {
-    if (_sessionId == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Start a session first')));
-      return;
-    }
+		setState(() => _scanning = true);
+		try {
+			_ble.startScan((uuid, minor) async {
+				if (minor != BleService.kStudentMinorId) return;
 
-    final allowed = await PermissionService.requestBlePermissions();
-    if (!allowed) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth/Location permissions are required')));
-      await PermissionService.openAppSettingsIfNeeded();
-      return;
-    }
+				final sig = uuid;
+				final now = DateTime.now().toIso8601String();
 
-    setState(() { _scanning = true; });
-    try {
-      _ble.startScan((uuid, minor) async {
-        // Filter for Student broadcasts only
-        if (minor != BleService.kStudentMinorId) return;
+				try {
+					final profile = await _api.resolveAdvertised(sig);
+					if (profile != null) {
+						final idx = _students.indexWhere((s) => s['student_id'] == profile['id']);
+						if (idx >= 0 && _students[idx]['present'] != true) {
+							_students[idx]['present'] = true;
+							_students[idx]['discovered_at'] = now;
+							_students[idx]['synced'] = false;
+							await LocalStore.updatePending(_students);
+							if (mounted) setState(() {});
+						}
+						return; // ignore non-enrolled
+					}
+				} catch (e) {
+					debugPrint('[Scan] resolve error: $e');
+				}
+			});
+		} catch (e) {
+			if (!mounted) return;
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth must be turned on to scan.')));
+		}
+	}
 
-        final sig = uuid;
-        final now = DateTime.now().toIso8601String();
+	Future<void> _stopScanForStudents() async {
+		try {
+			_ble.stopScan();
+		} catch (_) {}
+		setState(() => _scanning = false);
+	}
 
-        // Try resolving to a student profile
-        try {
-          final profile = await _api.resolveAdvertised(sig);
-          if (profile != null) {
-            // If the profile matches an enrolled student, mark them present
-            final idx = _students.indexWhere((s) => s['student_id'] == profile['id']);
-            if (idx >= 0) {
-              if (_students[idx]['present'] != true) {
-                _students[idx]['present'] = true;
-                _students[idx]['discovered_at'] = now;
-                _students[idx]['synced'] = false;
-                await LocalStore.updatePending(_students);
-                if (mounted) setState(() {});
-              }
-              return;
-            }
+	Future<void> _endAttendance() async {
+		try {
+			await _ble.stopBeacon();
+		} catch (_) {}
+		await _stopScanForStudents();
+		_elapsedTimer?.cancel();
+		_realtimeTimer?.cancel();
 
-            // Not enrolled in this course, add to unknown detected list
-            final exists = _detected.any((d) => d['device_signature'] == sig);
-            if (!exists) {
-              final item = {
-                'session_id': _sessionId,
-                'device_signature': sig,
-                'discovered_at': now,
-                'approved': false,
-                'synced': false,
-                'name': profile['full_name'] ?? profile['email'] ?? 'Student',
-                'resolved': true,
-              };
-              setState(() => _detected.add(item));
-              await LocalStore.addPending(item);
-            }
-            return;
-          }
-        } catch (e) {
-          debugPrint('[Scan] resolve error: $e');
-        }
+		final sessId = _sessionId;
+		final sessionNumber = _sessionsDisplayCount();
+		final reviewStudents = _students.map((e) => Map<String, dynamic>.from(e)).toList();
 
-        // Fallback: add raw signature to unknown list
-        final exists2 = _detected.any((d) => d['device_signature'] == sig);
-        if (!exists2) {
-          final item = {
-            'session_id': _sessionId,
-            'device_signature': sig,
-            'discovered_at': now,
-            'approved': false,
-            'synced': false,
-            'name': null,
-            'resolved': false,
-          };
-          setState(() => _detected.add(item));
-          await LocalStore.addPending(item);
-        }
-      });
-    } catch (e) {
-      // Friendly message when Bluetooth is off
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bluetooth must be turned on to scan.')));
-    }
+		if (sessId != null) {
+			try {
+				await _api.endSession(sessId);
+				if (mounted) {
+					ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session ended on server')));
+				}
+			} catch (e) {
+				if (mounted) {
+					ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to end session on server: $e')));
+				}
+			}
+		}
 
-    // Keep scanning until explicitly stopped by End Attendance
-    setState(() { _scanning = true; });
-  }
+		if (sessId != null && mounted) {
+			final result = await Navigator.of(context).push(MaterialPageRoute(
+				builder: (_) => AttendanceReviewScreen(
+					course: widget.course,
+					sessionId: sessId,
+					sessionNumber: sessionNumber,
+					students: reviewStudents,
+					sessionSynced: false,
+				),
+			));
 
-  Future<void> _stopScanForStudents() async {
-    try {
-      _ble.stopScan();
-    } catch (_) {}
-    setState(() { _scanning = false; });
-  }
+			_elapsedSeconds = 0;
+			setState(() => _sessionId = null);
+			if (result != null && mounted) {
+				Navigator.of(context).pop(result == 'saved');
+			}
+		}
+	}
 
-  Future<void> _loadPending() async {
-    final items = await LocalStore.loadPending();
-    setState(() => _detected = items);
-    _loadSessionCount();
-  }
+	Future<void> _loadSessionCount() async {
+		try {
+			final cnt = await _api.getSessionCount(widget.course['id']);
+			if (mounted) setState(() => _sessionsCount = cnt);
+		} catch (e) {
+			debugPrint('[SessionCount] failed to load for course ${widget.course['id']}: $e');
+		}
+	}
 
+	int _sessionsDisplayCount() {
+		if (_sessionsCount == 0) return 0;
+		final rem = _sessionsCount % kMaxSessions;
+		return rem == 0 ? kMaxSessions : rem;
+	}
 
+	Future<void> _autoSync() async {
+		if (_syncing) return;
 
-  Future<void> _loadSessionCount() async {
-    try {
-      final cnt = await _api.getSessionCount(widget.course['id']);
-      if (mounted) setState(() => _sessionsCount = cnt);
-    } catch (e) {
-      debugPrint('[SessionCount] failed to load for course ${widget.course['id']}: $e');
-    }
-  }
+		final pending = await LocalStore.loadPending();
+		final need = pending.where((d) => d['approved'] == true && d['synced'] != true).toList();
+		if (need.isNotEmpty) {
+			_syncing = true;
+			// Legacy pending sync removed; kept to avoid concurrent syncs.
+			_syncing = false;
+		}
 
-  // Convert raw session rows into a user-friendly count within 0..kMaxSessions
-  int _sessionsDisplayCount() {
-    final raw = _sessionsCount;
-    if (raw == 0) return 0;
-    final rem = raw % kMaxSessions;
-    return rem == 0 ? kMaxSessions : rem;
-  }
+		final snapshots = await LocalStore.loadAttendanceSnapshots();
+		final needSnap = snapshots.where((s) => s['synced'] != true).toList();
+		if (needSnap.isEmpty) return;
 
-  Future<void> _toggleApprove(int idx) async {
-    setState(() => _detected[idx]['approved'] = !_detected[idx]['approved']);
-    await LocalStore.updatePending(_detected);
-  }
+		if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+		}
 
-  Future<void> _syncApproved() async {
-    // Legacy: sync unknown detected devices approved by teacher
-    final approved = _detected.where((d) => d['approved'] == true && d['synced'] != true).toList();
-    if (approved.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No approved items to sync')));
-      return;
-    }
+		_syncing = true;
+		for (var snap in needSnap) {
+			try {
+				final sessionId = snap['session_id'];
+				final students = (snap['students'] as List<dynamic>?) ?? [];
+				for (var st in students) {
+					if (st['present'] == true) {
+						await _api.approveStudentById(sessionId, st['student_id']);
+					}
+				}
+				snap['synced'] = true;
+			} catch (e) {
+				debugPrint('[AutoSync] failed snapshot sync: $e');
+			}
+		}
+		await LocalStore.updateAttendanceSnapshots(snapshots);
+		_syncing = false;
 
-    for (var item in approved) {
-      try {
-        await _api.markAttendanceByTeacher(item['session_id'], item['device_signature']);
-        item['synced'] = true;
-      } on Exception catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-      }
-    }
-    await LocalStore.updatePending(_detected);
-    setState(() {});
-  }
+		if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance sync complete')));
+		}
+	}
 
+	Future<void> _checkUnsyncedSnapshots() async {
+		try {
+			final snaps = await LocalStore.loadAttendanceSnapshots();
+			final need = snaps.where((s) => s['synced'] != true).toList();
+			if (need.isNotEmpty) {
+				if (mounted) {
+					ScaffoldMessenger.of(context).showSnackBar(
+						const SnackBar(content: Text('Device restart (not synced): syncing previous attendance pls wait.')),
+					);
+				}
+				_autoSync();
+			}
+		} catch (_) {}
+	}
 
+	List<Map<String, dynamic>> get _filteredStudents {
+		final query = _searchQuery.toLowerCase();
+		if (query.isEmpty) return _students;
+		return _students.where((s) {
+			final name = (s['name'] ?? '').toString().toLowerCase();
+			final email = (s['email'] ?? '').toString().toLowerCase();
+			return name.contains(query) || email.contains(query);
+		}).toList();
+	}
 
-  Future<void> _autoSync() async {
-    if (_syncing) return;
-    // 1) Sync legacy pending approved devices
-    final pending = await LocalStore.loadPending();
-    final need = pending.where((d) => d['approved'] == true && d['synced'] != true).toList();
-    if (need.isNotEmpty) {
-      _syncing = true;
-      await _syncApproved();
-      _syncing = false;
-    }
+	@override
+	Widget build(BuildContext context) {
+		final courseTitle = '${widget.course['course_name'] ?? widget.course['name'] ?? ''}${widget.course['course_code'] != null ? ' (${widget.course['course_code']})' : ''}';
 
-    // 2) Sync attendance snapshots
-    final snapshots = await LocalStore.loadAttendanceSnapshots();
-    final needSnap = snapshots.where((s) => s['synced'] != true).toList();
-    if (needSnap.isEmpty) return;
-
-    // Inform user and begin syncing
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
-
-    _syncing = true;
-    for (var snap in needSnap) {
-      try {
-        final sessionId = snap['session_id'];
-        final students = (snap['students'] as List<dynamic>?) ?? [];
-        for (var st in students) {
-          if (st['present'] == true) {
-            await _api.approveStudentById(sessionId, st['student_id']);
-          }
-        }
-        // mark snapshot as synced
-        snap['synced'] = true;
-      } catch (e) {
-        print('[AutoSync] failed snapshot sync: $e');
-      }
-    }
-    await LocalStore.updateAttendanceSnapshots(snapshots);
-    _syncing = false;
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance sync complete')));
-  }
-
-
-
-  Future<void> _checkUnsyncedSnapshots() async {
-    try {
-      final snaps = await LocalStore.loadAttendanceSnapshots();
-      final need = snaps.where((s) => s['synced'] != true).toList();
-      if (need.isNotEmpty) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device restart (not synced): syncing previous attendance pls wait.')));
-        _autoSync();
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
-
-
-
-
-  @override
-  Widget build(BuildContext context) {
-    final courseTitle = '${widget.course['course_name'] ?? widget.course['name'] ?? ''}${widget.course['course_code'] != null ? ' (${widget.course['course_code']})' : ''}';
-    return Scaffold(
-      appBar: AppBar(title: Text(courseTitle)),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            // Show sessions count (normalized) even before starting attendance
-            Text('Sessions: ${_sessionsDisplayCount()}/$kMaxSessions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            const SizedBox(height: 12),
-            // Note: Start/End buttons are in bottomNavigationBar
-            const SizedBox(height: 8),
-            Text('Seconds: $_elapsedSeconds s', style: const TextStyle(fontSize: 18)),
-            const SizedBox(height: 8),
-            const SizedBox(height: 12),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    // Unknown detected devices
-                    ..._detected.map((d) => ListTile(
-                          title: Text(d['name'] ?? d['device_signature']),
-                          subtitle: Text('${d['discovered_at']} - ${d['synced'] == true ? 'Synced' : d['approved'] == true ? 'Approved' : 'Pending'}'),
-                          trailing: IconButton(icon: Icon(d['approved'] == true ? Icons.check_box : Icons.check_box_outline_blank), onPressed: () => _toggleApprove(_detected.indexOf(d))),
-                        )).toList(),
-                    const Divider(),
-                    const SizedBox(height: 8),
-                    Text('Enrolled Students', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    // Search bar for enrolled students
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search students by name or email',
-                          suffixIcon: _searchQuery.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() => _searchQuery = '');
-                                  },
-                                )
-                              : null,
-                        ),
-                        onChanged: (v) => setState(() => _searchQuery = v.trim()),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    // Enrolled students list (filtered by search)
-                    ..._students.where((s) {
-                      final q = _searchQuery.toLowerCase();
-                      if (q.isEmpty) return true;
-                      final name = (s['name'] ?? '').toString().toLowerCase();
-                      final email = (s['email'] ?? '').toString().toLowerCase();
-                      return name.contains(q) || email.contains(q);
-                    }).map((s) => ListTile(
-                          title: Text(s['name'] ?? 'Student'),
-                          subtitle: Text(s['discovered_at'] ?? ''),
-                          leading: Checkbox(value: s['present'] == true, onChanged: (_) {
-                            setState(() => s['present'] = !(s['present'] == true));
-                          }),
-                        )).toList(),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 36), // space so bottom buttons don't overlap
-
-          ],
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _sessionId == null ? _startSession : null,
-                  child: const Text('Start Attendance'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _sessionId != null ? () async {
-                    // End attendance: stop beacon and scanning, call endSession API and open review page
-                    try { await _ble.stopBeacon(); } catch (_) {}
-                    await _stopScanForStudents();
-                    _elapsedTimer?.cancel();
-
-                    final sessId = _sessionId;
-
-                    // Call backend to end session (best-effort; show status)
-                    if (sessId != null) {
-                      try {
-                        await _api.endSession(sessId);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session ended on server')));
-                      } catch (e) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to end session on server: $e')));
-                      }
-                    }
-
-                    setState(() { _sessionId = null; /* preserve students for review navigation */ });
-
-                    if (sessId != null) {
-                      // Open review screen and wait for it to close, then pop this screen
-                      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => AttendanceReviewScreen(
-                        course: widget.course,
-                        sessionId: sessId,
-                        sessionNumber: _sessionsDisplayCount(),
-                        students: _students,
-                      )));
-
-                      // Reset elapsed and students, and pop with result=true to notify caller to refresh
-                      _elapsedSeconds = 0;
-                      if (mounted) {
-                        // Clear local session state and return true to the caller
-                        setState(() => _sessionId = null);
-                        Navigator.of(context).pop(true);
-                      }
-                    }
-                  } : null,
-                  child: const Text('End Attendance'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+		return Scaffold(
+			appBar: AppBar(
+				title: Text(courseTitle),
+				actions: [
+					if (_sessionId != null)
+						Padding(
+							padding: const EdgeInsets.only(right: 12.0),
+							child: Center(
+								child: Row(
+									children: [
+										if (_scanning) const Icon(Icons.bluetooth_searching, size: 18),
+										const SizedBox(width: 6),
+										Text('$_elapsedSeconds s'),
+									],
+								),
+							),
+						),
+				],
+			),
+			body: Padding(
+				padding: const EdgeInsets.all(16.0),
+				child: Column(
+					crossAxisAlignment: CrossAxisAlignment.start,
+					children: [
+						Text('Sessions: ${_sessionsDisplayCount()}/$kMaxSessions', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+						const SizedBox(height: 12),
+						TextField(
+							controller: _searchController,
+							decoration: InputDecoration(
+								hintText: 'Search students by name or email',
+								suffixIcon: _searchQuery.isNotEmpty
+										? IconButton(
+												icon: const Icon(Icons.clear),
+												onPressed: () {
+													_searchController.clear();
+													setState(() => _searchQuery = '');
+												},
+											)
+										: null,
+							),
+							onChanged: (v) => setState(() => _searchQuery = v.trim()),
+						),
+						const SizedBox(height: 12),
+						Expanded(
+							child: ListView.builder(
+								itemCount: _filteredStudents.length,
+								itemBuilder: (context, index) {
+									final s = _filteredStudents[index];
+									return ListTile(
+										leading: Checkbox(
+											value: s['present'] == true,
+											onChanged: (_) {
+												setState(() => s['present'] = !(s['present'] == true));
+											},
+										),
+										title: Text(s['name'] ?? 'Student'),
+										subtitle: s['discovered_at'] != null ? Text('Detected at ${s['discovered_at']}') : null,
+									);
+								},
+							),
+						),
+					],
+				),
+			),
+			bottomNavigationBar: SafeArea(
+				child: Padding(
+					padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+					child: Row(
+						children: [
+							Expanded(
+								child: ElevatedButton(
+									onPressed: _sessionId == null ? _startSession : null,
+									child: const Text('Start Attendance'),
+								),
+							),
+							const SizedBox(width: 12),
+							Expanded(
+								child: ElevatedButton(
+									onPressed: _sessionId != null ? _endAttendance : null,
+									child: const Text('End Attendance'),
+								),
+							),
+						],
+					),
+				),
+			),
+		);
+	}
 }
+

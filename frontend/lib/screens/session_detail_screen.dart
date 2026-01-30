@@ -1,9 +1,8 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'attendance_review_screen.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../services/local_store.dart';
-import '../services/permission_service.dart';
 
 class SessionDetailScreen extends StatefulWidget {
   final Map session;

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+// ignore_for_file: curly_braces_in_flow_control_structures, use_build_context_synchronously
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/api_service.dart';
 import '../services/permission_service.dart';
@@ -252,8 +254,9 @@ class _CourseSessionsScreenState extends State<CourseSessionsScreen> {
                           itemBuilder: (_, i) {
                             final s = _sessions[i] as Map;
                             final cnt = s['attendance_count'] ?? 0;
+                            final isActive = s['is_active'] == true;
                             return ListTile(
-                              title: Text('Session ${s['session_number'] ?? ''} • ${s['is_active'] == false ? 'Ended' : 'Active'}'),
+                              title: Text('Session ${s['session_number'] ?? ''} • ${isActive ? 'Active' : 'Ended'}'),
                               subtitle: Text('$cnt attendees'),
                               trailing: ElevatedButton(
                                 onPressed: () {

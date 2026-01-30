@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+// ignore_for_file: curly_braces_in_flow_control_structures, use_build_context_synchronously
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/api_service.dart';
 import '../services/sync_service.dart';
+import '../services/device_service.dart';
 import 'student_session_scanner.dart';
 import 'teacher_dashboard.dart';
 import 'course_detail_screen.dart';
+
 
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
@@ -101,8 +105,10 @@ class _CoursesScreenState extends State<CoursesScreen> {
           final counts = <String, int>{};
           final detailsMap = <String, Map<String, dynamic>>{};
           for (var r in results) {
-            counts[r['id'] as String] = r['count'] as int;
-            detailsMap[r['id'] as String] = r['details'] as Map<String, dynamic>;
+            final id = r['id'] as String;
+            final cnt = int.tryParse(r['count']?.toString() ?? '') ?? 0;
+            counts[id] = cnt;
+            detailsMap[id] = Map<String, dynamic>.from(r['details'] as Map);
           }
           if (mounted) setState(() {
             _sessionCounts = counts;
@@ -114,28 +120,50 @@ class _CoursesScreenState extends State<CoursesScreen> {
             final enrolled = courses;
             int sessionsTotal = 0;
             int attendanceTotal = 0;
-            for (var c in enrolled) {
-              final det = detailsMap[c['id']] ?? {};
-              sessionsTotal += (det['total_sessions'] as int?) ?? (counts[c['id']] ?? 0);
-              // Use per-student attendance when the key is present (even if it's 0). Fall back to total_attendance otherwise.
-              if (det.containsKey('student_attendance')) {
-                final val = det['student_attendance'];
-                if (val is int) attendanceTotal += val;
-                else if (val is num) attendanceTotal += val.toInt();
-                else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
-                else attendanceTotal += 0;
-              } else {
-                final val = det['total_attendance'];
-                if (val is int) attendanceTotal += val;
-                else if (val is num) attendanceTotal += val.toInt();
-                else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
-                else attendanceTotal += 0;
+
+            // Fetch sessions for each course to compute per-student attendance reliably
+            try {
+              final sessionFutures = enrolled.map((c) => _api.getCourseSessions(c['id']));
+              final sessionsResults = await Future.wait(sessionFutures);
+
+              for (var i = 0; i < enrolled.length; i++) {
+                final c = enrolled[i];
+                final det = detailsMap[c['id']] ?? {};
+
+                sessionsTotal += (det['total_sessions'] as int?) ?? (counts[c['id']] ?? 0);
+
+                final sessForCourseList = (sessionsResults[i] as List<dynamic>?) ?? <dynamic>[];
+                final studentAtt = sessForCourseList.where((s) => s['student_attended'] == true).length;
+
+                // Store student_attendance into detailsMap so UI can prefer it
+                detailsMap[c['id']] = {...det, 'student_attendance': studentAtt};
+
+                attendanceTotal += studentAtt;
+              }
+            } catch (e) {
+              // If fetching sessions fails, fall back to previous logic
+              for (var c in enrolled) {
+                final det = detailsMap[c['id']] ?? {};
+                sessionsTotal += (det['total_sessions'] as int?) ?? (counts[c['id']] ?? 0);
+                if (det.containsKey('student_attendance')) {
+                  final val = det['student_attendance'];
+                  if (val is int) attendanceTotal += val;
+                  else if (val is num) attendanceTotal += val.toInt();
+                  else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
+                } else {
+                  final val = det['total_attendance'];
+                  if (val is int) attendanceTotal += val;
+                  else if (val is num) attendanceTotal += val.toInt();
+                  else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
+                }
               }
             }
+
             if (mounted) setState(() {
               _enrolledCourses = List.from(enrolled);
               _enrolledSessionsTotal = sessionsTotal;
               _enrolledAttendanceTotal = attendanceTotal;
+              _courseDetails = detailsMap; // persist updated student_attendance entries
             });
           }
         } catch (e) {
@@ -151,13 +179,116 @@ class _CoursesScreenState extends State<CoursesScreen> {
     setState(() => _loading = false);
   }
 
-  void _onCourseTap(Map course) {
+  void _onCourseTap(Map<String, dynamic> course) {
     if (_role == 'teacher') {
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => CourseSessionsScreen(course: course)));
     } else {
-      // Students should see course details instead of opening the course list
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => CourseDetailScreen(course: course)));
     }
+  }
+
+  // ignore: unused_element
+  Future<void> _markAttendanceForCourse(Map<String, dynamic> course) async {
+    final courseId = course['id'] as String;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    try {
+      final sessions = await _api.getCourseSessions(courseId);
+      if (sessions.isEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No sessions found for this course')));
+        return;
+      }
+
+      Map<String, dynamic>? active;
+      for (var s in sessions) {
+        if (s is Map && s['is_active'] == true) {
+          active = Map<String, dynamic>.from(s);
+          break;
+        }
+      }
+      active ??= Map<String, dynamic>.from(sessions.first as Map);
+
+      final sessionId = active['id'];
+      final already = active['student_attended'] == true;
+      if (already) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('You already marked attendance for this session')));
+        return;
+      }
+
+      final sig = await DeviceService.getDeviceSignature();
+      try {
+        await _api.markAttendance(sessionId, sig);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance marked ✅')));
+        await _refreshCourseAfterMark(courseId);
+      } catch (e) {
+        final msg = e.toString();
+        if (msg.contains('410') || msg.toLowerCase().contains('expired')) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session expired or inactive')));
+        } else if (msg.toLowerCase().contains('already marked')) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('You already marked attendance')));
+        } else {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to mark attendance: $e')));
+        }
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error marking attendance: $e')));
+    }
+  }
+
+  Future<void> _refreshCourseAfterMark(String courseId) async {
+    try {
+      final details = await _api.getCourseDetails(courseId);
+      final sessions = await _api.getCourseSessions(courseId);
+      final studentAtt = sessions.where((s) => s['student_attended'] == true).length;
+      final merged = {...details, 'student_attendance': studentAtt};
+
+      if (mounted) setState(() {
+        _courseDetails[courseId] = Map<String, dynamic>.from(merged);
+        _sessionCounts[courseId] = merged['total_sessions'] as int? ?? _sessionCounts[courseId] ?? 0;
+      });
+
+      if (_role == 'student') await _computeStudentTotals();
+    } catch (e) {
+      debugPrint('[Courses] refreshCourseAfterMark failed: $e');
+    }
+  }
+
+  Future<void> _computeStudentTotals() async {
+    final enrolled = _courses;
+    int sessionsTotal = 0;
+    int attendanceTotal = 0;
+
+    try {
+      final sessionFutures = enrolled.map((c) => _api.getCourseSessions(c['id'])).toList();
+      final sessionsResults = await Future.wait(sessionFutures);
+
+      for (var i = 0; i < enrolled.length; i++) {
+        final c = enrolled[i];
+        final det = _courseDetails[c['id']] ?? {};
+        sessionsTotal += (det['total_sessions'] as int?) ?? (_sessionCounts[c['id']] ?? 0);
+
+        final sessForCourseList = (sessionsResults[i] as List<dynamic>?) ?? <dynamic>[];
+        final studentAtt = sessForCourseList.where((s) => s['student_attended'] == true).length;
+        attendanceTotal += studentAtt;
+
+        _courseDetails[c['id']] = {...det, 'student_attendance': studentAtt};
+      }
+    } catch (e) {
+      for (var c in enrolled) {
+        final det = _courseDetails[c['id']] ?? {};
+        sessionsTotal += (det['total_sessions'] as int?) ?? (_sessionCounts[c['id']] ?? 0);
+        final val = det['student_attendance'] ?? det['total_attendance'] ?? 0;
+        if (val is int) attendanceTotal += val;
+        else if (val is num) attendanceTotal += val.toInt();
+        else if (val is String) attendanceTotal += int.tryParse(val) ?? 0;
+      }
+    }
+
+    if (mounted) setState(() {
+      _enrolledCourses = List.from(enrolled);
+      _enrolledSessionsTotal = sessionsTotal;
+      _enrolledAttendanceTotal = attendanceTotal;
+    });
   }
 
   @override

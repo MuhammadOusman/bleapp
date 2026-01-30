@@ -26,18 +26,26 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     try {
       final det = await _api.getCourseDetails(widget.course['id']);
       final sessions = await _api.getCourseSessions(widget.course['id']);
-      if (mounted) setState(() {
-        _details = det;
-        _sessions = sessions;
-      });
+      if (mounted) {
+        setState(() {
+          _details = det;
+          _sessions = sessions;
+        });
+      }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load course details: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load course details: $e')));
+      }
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted) {
+      setState(() => _loading = false);
+    }
   }
 
   String _formatDate(String? iso) {
-    if (iso == null) return '';
+    if (iso == null) {
+      return '';
+    }
     try {
       final dt = DateTime.parse(iso).toLocal();
       return '${dt.year}-${dt.month.toString().padLeft(2,'0')}-${dt.day.toString().padLeft(2,'0')} ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
@@ -83,7 +91,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ? const Center(child: Text('No sessions found'))
                         : ListView.separated(
                             itemCount: _sessions.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, index) => const Divider(height: 1),
                             itemBuilder: (_, i) {
                               final s = _sessions[i];
                               final attended = s['student_attended'] == true;
