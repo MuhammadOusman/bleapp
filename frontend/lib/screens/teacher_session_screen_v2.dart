@@ -10,6 +10,7 @@ import '../services/ble_service.dart';
 import '../services/local_store.dart';
 import '../services/permission_service.dart';
 import 'attendance_review_screen.dart';
+import '../widgets/app_snackbar.dart';
 
 class TeacherSessionScreenV2 extends StatefulWidget {
 	final Map course;
@@ -255,10 +256,8 @@ class _TeacherSessionScreenV2State extends State<TeacherSessionScreenV2> {
 
 		if (sessId != null) {
 			try {
-				await _api.endSession(sessId);
-				if (mounted) {
-					ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session ended on server')));
-				}
+				await _api.endSession(sessId); 
+				if (mounted) showAppSnackBar(context, 'Session ended on server', type: SnackType.success);
 			} catch (e) {
 				if (mounted) {
 					ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to end session on server: $e')));

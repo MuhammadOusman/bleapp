@@ -11,6 +11,8 @@ import 'package:permission_handler/permission_handler.dart';
 /// App Settings) to help the user enable Bluetooth.
 class BluetoothGate extends StatefulWidget {
   final Widget child;
+  /// When true, the gate is bypassed (useful for widget tests or platforms without BLE).
+  static bool disableForTesting = false;
   const BluetoothGate({required this.child, super.key});
 
   @override
@@ -25,7 +27,12 @@ class _BluetoothGateState extends State<BluetoothGate> {
   @override
   void initState() {
     super.initState();
-    _initStateListener();
+    if (!BluetoothGate.disableForTesting) {
+      _initStateListener();
+    } else {
+      _checked = true;
+      _isOn = true;
+    }
   }
 
   Future<void> _initStateListener() async {
@@ -90,6 +97,8 @@ class _BluetoothGateState extends State<BluetoothGate> {
     // MaterialApp — instead render overlays that use the surrounding
     // Theme/Directionality.
     final child = widget.child;
+
+    if (BluetoothGate.disableForTesting) return child;
 
     return Stack(
       children: [

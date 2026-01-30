@@ -1,78 +1,71 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'screens/login_screen.dart';
-import 'screens/courses_screen.dart';
-import 'screens/teacher_dashboard.dart';
-import 'widgets/bluetooth_gate.dart';
-
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'screens/courses_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/teacher_dashboard.dart';
+import 'state/theme_provider.dart';
+import 'theme/app_theme.dart';
+import 'widgets/bluetooth_gate.dart';
 
 // Values are sourced from .env (preferred). Fallbacks provided for convenience.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await dotenv.load(fileName: '.env');
-  } catch (e) {
-    // Some environments (device assets) may not expose the file system path; try to load .env from assets
-    try {
-      final raw = await rootBundle.loadString('.env');
-      final lines = raw.split(RegExp(r'\r?\n'));
-      for (var line in lines) {
-        line = line.trim();
-        if (line.isEmpty || line.startsWith('#')) continue;
-        final idx = line.indexOf('=');
-        if (idx <= 0) continue;
-        final k = line.substring(0, idx).trim();
-        var v = line.substring(idx + 1).trim();
-        // remove optional surrounding quotes
-        if (v.startsWith('"') && v.endsWith('"')) v = v.substring(1, v.length - 1);
-        if (v.startsWith("'") && v.endsWith("'")) v = v.substring(1, v.length - 1);
-        dotenv.env[k] = v;
-      }
-      // quick info to help debugging in logs
-      // ignore: avoid_print
-      print('Loaded .env from assets fallback');
-    } catch (e2) {
-      // Rethrow the original exception to preserve the error
-      rethrow;
-    }
-  }
+  await _loadEnv();
 
-  // Read Supabase config exclusively from environment. No fallbacks or hard-coded secrets.
   final supabaseUrl = dotenv.env['SUPABASE_URL'];
   final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
 
   if (supabaseUrl == null || supabaseUrl.isEmpty || supabaseAnonKey == null || supabaseAnonKey.isEmpty) {
-    // Fail fast - secrets must be provided via `.env` (do not commit `.env`)
-    throw Exception('Missing SUPABASE_URL and/or SUPABASE_ANON_KEY in .env. Copy .env.example → .env and fill values.');
+    throw Exception('Missing SUPABASE_URL and/or SUPABASE_ANON_KEY in .env.');
   }
 
-  await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseAnonKey,
-  );
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+  runApp(const ProviderScope(child: AtDsuApp()));
+}
 
-  runApp(const MyApp());
-} 
+Future<void> _loadEnv() async {
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (_) {
+    final raw = await rootBundle.loadString('.env');
+    final lines = raw.split(RegExp(r'\r?\n'));
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      final idx = line.indexOf('=');
+      if (idx <= 0) continue;
+      final k = line.substring(0, idx).trim();
+      var v = line.substring(idx + 1).trim();
+      if (v.startsWith('"') && v.endsWith('"')) v = v.substring(1, v.length - 1);
+      if (v.startsWith("'") && v.endsWith("'")) v = v.substring(1, v.length - 1);
+      dotenv.env[k] = v;
+    }
+  }
+}
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class AtDsuApp extends ConsumerWidget {
+  const AtDsuApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(themeProvider);
+
     return MaterialApp(
-      title: 'DSU BLE Attendance',
-      theme: ThemeData(primarySwatch: Colors.indigo),
+      debugShowCheckedModeBanner: false,
+      title: 'atDSU',
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: mode,
       initialRoute: '/',
       routes: {
         '/': (context) => const LoginScreen(),
         '/courses': (context) => const CoursesScreen(),
         '/dashboard': (context) => const TeacherDashboardScreen(),
       },
-      // Insert the Bluetooth gate into the built widget tree so Theme / Directionality
-      // are available to the gate's overlay UI. The child passed to builder is the
-      // Navigator/contents of the app.
       builder: (context, child) => BluetoothGate(child: child ?? const SizedBox.shrink()),
     );
   }

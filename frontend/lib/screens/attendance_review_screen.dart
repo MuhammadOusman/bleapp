@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
 import '../services/local_store.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_scaffold.dart';
+import '../widgets/app_snackbar.dart';
 
 class AttendanceReviewScreen extends StatefulWidget {
   final Map course;
@@ -33,6 +36,11 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   late List<Map<String, dynamic>> _students;
   bool _saving = false;
   late bool _sessionSynced;
+
+  void _toast(String message, {SnackType type = SnackType.info}) {
+    if (!mounted) return;
+    showAppSnackBar(context, message, type: type);
+  }
 
   @override
   void initState() {
@@ -86,7 +94,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
     if (isOffline) {
       await LocalStore.addAttendanceSnapshot(snapshot);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: saved locally. Will sync when online.')));
+      _toast('Offline: saved locally. Will sync when online.', type: SnackType.info);
       setState(() => _saving = false);
       Navigator.of(context).pop('saved');
       return;
@@ -94,7 +102,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
 
     try {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Syncing attendance, don't close app")));
+        _toast("Syncing attendance, don't close app", type: SnackType.info);
       }
 
       for (var s in snapshot['students']) {
@@ -108,7 +116,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       } catch (_) {}
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance saved and synced')));
+      _toast('Attendance saved and synced', type: SnackType.success);
       setState(() => _saving = false);
       Navigator.of(context).pop('saved');
     } catch (e) {
@@ -129,14 +137,14 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
 
       if (choice == 'save') {
         await LocalStore.addAttendanceSnapshot(snapshot);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved locally; will retry when online.')));
+        _toast('Saved locally; will retry when online.', type: SnackType.info);
         setState(() => _saving = false);
         Navigator.of(context).pop('saved');
       } else if (choice == 'retry') {
         setState(() => _saving = false);
         await _saveAttendance();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Attendance discarded')));
+        _toast('Attendance discarded', type: SnackType.info);
         setState(() => _saving = false);
         Navigator.of(context).pop('discard');
       }
@@ -155,7 +163,7 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
     final isOffline = conn.isEmpty || conn.every((r) => r == ConnectivityResult.none);
     if (isOffline) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offline: cannot discard. Connect to internet to delete session.')));
+        _toast('Offline: cannot discard. Connect to internet to delete session.', type: SnackType.error);
       }
       setState(() => _saving = false);
       return;
@@ -164,11 +172,16 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
     try {
       await _api.deleteSession(widget.sessionId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session discarded and removed')));
+      _toast('Session discarded and removed', type: SnackType.success);
       Navigator.of(context).pop('discard');
+    } on FormatException catch (e) {
+      if (mounted) {
+        _toast('Discard failed: invalid session format (${e.message})', type: SnackType.error);
+        setState(() => _saving = false);
+      }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to discard session: $e')));
+        _toast('Failed to discard session: $e', type: SnackType.error);
         setState(() => _saving = false);
       }
     }
@@ -178,49 +191,127 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
   Widget build(BuildContext context) {
     final courseTitle = '${widget.course['course_name'] ?? widget.course['name'] ?? ''}${widget.course['course_code'] != null ? ' (${widget.course['course_code']})' : ''}';
 
-    return Scaffold(
-      appBar: AppBar(title: Text('$courseTitle — Session ${widget.sessionNumber}')),
+    return AppScaffold(
+      padded: false,
+      appBar: AppBar(
+        title: Text('$courseTitle — Session ${widget.sessionNumber}'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
         child: Column(
           children: [
-            Expanded(
-              child: ListView.builder(
-                itemCount: _students.length,
-                itemBuilder: (_, i) {
-                  final s = _students[i];
-                  return CheckboxListTile(
-                    title: Text(s['name'] ?? 'Student'),
-                    value: s['present'] == true,
-                    onChanged: _sessionSynced || _saving ? null : (v) => setState(() => s['present'] = v == true),
-                  );
-                },
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: AppTheme.gradient,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: AppTheme.glow,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _saving || _sessionSynced ? null : _discardAttendance,
-                      child: const Text('Discard'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _saving || _sessionSynced ? null : _saveAttendance,
-                      child: _saving
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Text('Save Attendance'),
-                    ),
+                  Text('Review & Finalize', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white70)),
+                  const SizedBox(height: 6),
+                  Text(courseTitle, style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _headerBadge(Icons.people_alt_rounded, '${_students.length} students'),
+                      const SizedBox(width: 8),
+                      _headerBadge(Icons.check_circle, '${_students.where((s) => s['present'] == true).length} marked'),
+                    ],
                   ),
                 ],
               ),
-            )
+            ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, 8))],
+                ),
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: _students.length,
+                  itemBuilder: (_, i) {
+                    final s = _students[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: ListTile(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        tileColor: Theme.of(context).colorScheme.surface,
+                        leading: CircleAvatar(
+                          backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((255 * 0.12).round()),
+                          child: Icon(
+                            Icons.person_rounded,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        title: Text(s['name'] ?? 'Student', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                        trailing: Switch(
+                          value: s['present'] == true,
+                          onChanged: _sessionSynced || _saving ? null : (v) => setState(() => s['present'] = v == true),
+                          thumbColor: WidgetStateProperty.all(Theme.of(context).colorScheme.primary),
+                          trackColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.selected)
+                                ? Theme.of(context).colorScheme.primary.withAlpha(90)
+                                : null,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _saving || _sessionSynced ? null : _discardAttendance,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Discard'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _saving || _sessionSynced ? null : _saveAttendance,
+                    icon: _saving
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check_circle_rounded),
+                    label: Text(_saving ? 'Saving...' : 'Save'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _headerBadge(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha((255 * 0.18).round()),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 18),
+          const SizedBox(width: 6),
+          Text(text, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        ],
       ),
     );
   }

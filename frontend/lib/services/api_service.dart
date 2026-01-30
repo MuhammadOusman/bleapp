@@ -250,10 +250,20 @@ class ApiService {
   }
 
   dynamic _handle(http.Response res) {
-    final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
+    dynamic body;
+    if (res.body.isNotEmpty) {
+      try {
+        body = jsonDecode(res.body);
+      } on FormatException {
+        // Backend sometimes returns empty/HTML bodies; keep raw text for messaging
+        body = res.body;
+      }
+    }
+
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body;
     }
+
     // Normalize body for error reporting
     final errBody = (body is Map<String, dynamic>) ? body : {'error': body?.toString()};
     throw ApiException(res.statusCode, errBody);
