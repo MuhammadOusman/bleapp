@@ -38,6 +38,7 @@ router.get('/courses/:id/sessions_count', authMiddleware, courseController.getSe
 // Session Management
 router.post('/sessions/start', authMiddleware, attendanceController.startSession);
 router.post('/sessions/:id/end', authMiddleware, attendanceController.endSession);
+router.delete('/sessions/:id', authMiddleware, attendanceController.deleteSession);
 router.get('/sessions/:id', authMiddleware, attendanceController.getSessionById);
 
 // Attendance

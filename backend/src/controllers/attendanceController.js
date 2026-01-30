@@ -233,3 +233,73 @@ exports.deleteAttendance = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// 9. DELETE SESSION (Teacher/Admin) with attendance cleanup
+exports.deleteSession = async (req, res) => {
+    const sessionId = req.params.id;
+    const user = req.user;
+    console.log('[deleteSession] requested', { sessionId, userId: user?.id, role: user?.role });
+
+    try {
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+            console.warn('[deleteSession] unauthorized role', user?.role);
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const { data: session, error: sessionErr } = await supabase
+            .from('sessions')
+            .select('*')
+            .eq('id', sessionId)
+            .single();
+
+        if (sessionErr || !session) {
+            console.warn('[deleteSession] session not found', sessionErr);
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // If teacher, ensure they own the course
+        if (user.role === 'teacher') {
+            const { data: course, error: courseErr } = await supabase
+                .from('courses')
+                .select('id, teacher_id')
+                .eq('id', session.course_id)
+                .single();
+
+            if (courseErr) {
+                console.error('[deleteSession] course fetch failed', courseErr);
+                return res.status(400).json({ error: courseErr.message });
+            }
+
+            if (course && course.teacher_id !== user.id) {
+                console.warn('[deleteSession] teacher does not own course', { courseId: course.id, teacherId: course.teacher_id, userId: user.id });
+                return res.status(403).json({ error: 'You do not own this course' });
+            }
+        }
+
+        const { error: attendanceErr } = await supabase
+            .from('attendance')
+            .delete()
+            .eq('session_id', sessionId);
+
+        if (attendanceErr) {
+            console.error('[deleteSession] failed to delete attendance', attendanceErr);
+            return res.status(400).json({ error: attendanceErr.message });
+        }
+
+        const { error: sessionDelErr } = await supabase
+            .from('sessions')
+            .delete()
+            .eq('id', sessionId);
+
+        if (sessionDelErr) {
+            console.error('[deleteSession] failed to delete session', sessionDelErr);
+            return res.status(400).json({ error: sessionDelErr.message });
+        }
+
+        console.log('[deleteSession] deleted session and attendance', { sessionId });
+        return res.json({ success: true, message: 'Session deleted', session_id: sessionId });
+    } catch (err) {
+        console.error('[deleteSession] internal error', err);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    }
+};

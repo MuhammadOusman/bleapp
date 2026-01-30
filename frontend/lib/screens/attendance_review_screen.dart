@@ -174,6 +174,12 @@ class _AttendanceReviewScreenState extends State<AttendanceReviewScreen> {
       if (!mounted) return;
       _toast('Session discarded and removed', type: SnackType.success);
       Navigator.of(context).pop('discard');
+    } on ApiException catch (e) {
+      if (mounted) {
+        final msg = e.body?['error'] ?? e.body?['message'] ?? 'Server rejected delete (HTTP ${e.statusCode})';
+        _toast('Failed to discard session: $msg', type: SnackType.error);
+        setState(() => _saving = false);
+      }
     } on FormatException catch (e) {
       if (mounted) {
         _toast('Discard failed: invalid session format (${e.message})', type: SnackType.error);

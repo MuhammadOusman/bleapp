@@ -31,6 +31,35 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
   int _totalSessions = 0;
   int _totalAttendance = 0;
   String _searchQuery = '';
+  String _displayName = 'Teacher';
+
+  String _deriveDisplayName(Map<String, dynamic>? profile) {
+    final full = profile?['full_name']?.toString().trim();
+    if (full != null && full.isNotEmpty) return full;
+
+    final email = profile?['email']?.toString().trim() ?? '';
+    if (email.isEmpty) return 'Teacher';
+
+    const domain = '@dsu.edu.pk';
+    final lower = email.toLowerCase();
+    if (lower.endsWith(domain)) {
+      return email.substring(0, email.length - domain.length);
+    }
+
+    final atIdx = email.indexOf('@');
+    return atIdx > 0 ? email.substring(0, atIdx) : email;
+  }
+
+  String _sanitizeCachedName(String? cached) {
+    if (cached == null || cached.trim().isEmpty) return 'Teacher';
+    final name = cached.trim();
+    const domain = '@dsu.edu.pk';
+    final lower = name.toLowerCase();
+    if (lower.endsWith(domain)) {
+      return name.substring(0, name.length - domain.length);
+    }
+    return name;
+  }
 
   @override
   void initState() {
@@ -54,6 +83,21 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
     try {
       final token = await _storage.read(key: 'token');
       if (token == null) throw 'Session expired. Please log in again.';
+
+      // Show cached name immediately so header is personalized while loading
+      try {
+        final cached = await _storage.read(key: 'profile_full_name');
+        final sanitized = _sanitizeCachedName(cached);
+        if (sanitized.isNotEmpty && mounted) setState(() => _displayName = sanitized);
+      } catch (_) {}
+
+      // Fetch latest profile for accurate display name
+      try {
+        final profile = await _api.getProfile();
+        final name = _deriveDisplayName(profile);
+        try { await _storage.write(key: 'profile_full_name', value: name); } catch (_) {}
+        if (mounted) setState(() => _displayName = name);
+      } catch (_) {}
 
       final courses = await _api.getCourses(token);
       int sessions = 0;
@@ -107,7 +151,7 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
     return AppScaffold(
       padded: false,
       appBar: AppBar(
-        title: Text('Teacher • atDSU', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+        title: Text('$_displayName • atDSU', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
         actions: [
           IconButton(
             icon: Icon(mode == ThemeMode.dark ? Icons.wb_sunny_rounded : Icons.nights_stay_rounded),
@@ -298,9 +342,17 @@ class _TeacherCourseTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(name.toString(), style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                      Text(
+                        name.toString(),
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       const SizedBox(height: 6),
-                      Text(code, style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey)),
+                      Text(
+                        code,
+                        style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
                   ),
                 ),
