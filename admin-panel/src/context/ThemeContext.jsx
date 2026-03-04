@@ -1,13 +1,17 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from 'react';
 
 const ThemeContext = createContext();
 
 export const ThemeProvider = ({ children }) => {
   const [theme, setTheme] = useState(() => {
+    // 1. If they visited before and set a preference, respect it
     if (localStorage.getItem('theme')) {
       return localStorage.getItem('theme');
     }
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    // 2. Otherwise, force 'light' as the default theme 
+    // (Removed the OS dark-mode check here)
+    return 'light';
   });
 
   useEffect(() => {

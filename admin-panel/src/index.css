@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-body {
-  background-color: #f8fafc; /* Light grey background */
+/* body {
+  background-color: #f8fafc; /* Light grey background 
   color: #0f172a;
-}
+} */
+
+@custom-variant dark (&:is(.dark *));
