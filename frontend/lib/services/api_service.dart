@@ -18,6 +18,7 @@ class ApiService {
   final storage = const FlutterSecureStorage();
 
   void _log(String msg) {
+    if (!kDebugMode) return;
     try {
       // Keep logs helpful but concise
       debugPrint('[API] $msg');

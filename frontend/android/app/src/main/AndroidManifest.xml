@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet permission (required for API calls in all build types including release) -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <!-- Bluetooth permissions (runtime needed on Android 12+ for SCAN/ADVERTISE/CONNECT) -->
     <!-- Legacy Bluetooth permissions (for Android 11 and lower) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
@@ -17,7 +20,7 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
-        android:label="frontend"
+        android:label="atDSU"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

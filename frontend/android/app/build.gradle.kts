@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.frontend"
-    // Compile against API 36 to satisfy newer plugin AAR metadata requirements
+    // Compile against API 36 to satisfy plugin requirements
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 

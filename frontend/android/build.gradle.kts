@@ -25,6 +25,37 @@ subprojects {
     }
 }
 
+// Ensure all Android library modules (e.g., beacon_broadcast) compile against a modern SDK so aapt2 can
+// resolve newer attributes such as android:attr/lStar during resource linking.
+subprojects {
+    plugins.withType<com.android.build.gradle.LibraryPlugin> {
+        extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
+            compileSdk = 36
+        }
+    }
+}
+
+// As a fallback, set compileSdk for any Android modules that did not pick it up during initial configuration.
+subprojects {
+    afterEvaluate {
+        extensions.findByType(com.android.build.api.dsl.LibraryExtension::class.java)?.let { ext ->
+            if (ext.compileSdk == null) {
+                ext.compileSdk = 36
+            }
+        }
+        extensions.findByType(com.android.build.api.dsl.ApplicationExtension::class.java)?.let { ext ->
+            if (ext.compileSdk == null) {
+                ext.compileSdk = 36
+            }
+        }
+
+        // Fallback for plugins still exposing the older BaseExtension API
+        (extensions.findByName("android") as? com.android.build.gradle.BaseExtension)?.let { ext ->
+            ext.compileSdkVersion(36)
+        }
+    }
+}
+
 // Enforce targets after all projects are evaluated (covers plugin-created tasks)
 gradle.projectsEvaluated {
     tasks.withType<JavaCompile>().configureEach {
@@ -40,22 +71,26 @@ gradle.projectsEvaluated {
 
     // Some third-party plugins (e.g., beacon_broadcast) still compile Java with 1.8.
     // If an included project uses Java 1.8, match Kotlin to 1.8 for that project to avoid validation errors.
-    rootProject.subprojects.filter { it.name == "beacon_broadcast" }.forEach { p ->
-        p.tasks.withType<JavaCompile>().configureEach {
-            sourceCompatibility = JavaVersion.VERSION_1_8.toString()
-            targetCompatibility = JavaVersion.VERSION_1_8.toString()
-        }
-        p.tasks.withType<KotlinCompile>().configureEach {
-            compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_1_8)
+    rootProject.subprojects.forEach { p ->
+        if (p.name == "beacon_broadcast") {
+            p.tasks.withType<JavaCompile>().configureEach {
+                sourceCompatibility = JavaVersion.VERSION_1_8.toString()
+                targetCompatibility = JavaVersion.VERSION_1_8.toString()
+            }
+            p.tasks.withType<KotlinCompile>().configureEach {
+                compilerOptions {
+                    jvmTarget.set(JvmTarget.JVM_1_8)
+                }
             }
         }
 
-        // Ensure this plugin compiles against the same (newer) Android API level as the app
+        // Ensure all library modules compile against the same Android API level as the app
         try {
             p.plugins.withType(com.android.build.gradle.LibraryPlugin::class.java) {
-                p.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
-                    compileSdk = 36
+                p.afterEvaluate {
+                    p.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+                        compileSdk = 36
+                    }
                 }
             }
         } catch (_: Throwable) {}
